@@ -1,0 +1,7 @@
+isapikey
+*.key
+.mypy_cache
+*.swp
+*.swo
+__pycache__
+make-full.log
