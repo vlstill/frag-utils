@@ -4,6 +4,10 @@ before_script:
     - apt-get update
     - apt-get install -yy mypy flake8
 
+variables:
+    MAKEFLAGS: "-j7 --output-sync=target"
+    GIT_SUBMODULE_STRATEGY: recursive
+
 check:
   script:
       - make check
