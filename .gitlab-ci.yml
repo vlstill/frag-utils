@@ -3,6 +3,7 @@ image: python:3.7
 before_script:
     - apt-get update
     - apt-get install -yy mypy flake8
+    - pip3 install python-dateutil psycopg2
 
 variables:
     MAKEFLAGS: "-j7 --output-sync=target"
