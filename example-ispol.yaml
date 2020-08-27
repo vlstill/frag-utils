@@ -1,0 +1,29 @@
+frag db: frag-db.fi.muni.cz
+# frag user: xstill # optional, defaults to current unix user
+course: iv074
+interval: 5
+sources:
+    week01:
+        - /el/fi/podzim2020/IV074/ode/ode_week01a
+        - /el/fi/podzim2020/IV074/ode/ode_week01b
+assignments:
+    week01_task01: # this is also ID of the assignment in frag
+        # enabled: True
+        enabled: # interval only to cut off polling, proper times set in frag
+            from: 2020-08-27
+            to: 2020-08-30
+        source: week01
+        # The following name_template accepts
+        # (UCO-)?(NAME-)?task01(_ALT_PATTERN)?.py where ALT_PATTERN is a random
+        # string added by IS when the same file name is inserted more than
+        # once. Names that share source should not be one prefix of another if
+        # they share extension.
+        #
+        # It it is not set, any file in the given directory will match this
+        # taks.
+        name template: task01.py
+    week01_nonexistent:
+        enabled: True
+        source: week01
+        name template: task_nonexistent.py
+vim: expandtab

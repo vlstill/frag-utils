@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import isapi.files
+import os
+import os.path
+import psycopg2  # type: ignore
+import re
+import signal
+import sys
+import time
+import typing
+import yaml
+
+from isapi.files import FileMeta
+from datetime import datetime, date
+from typing import Any, Optional, List, Dict, Pattern
+
+
+def cmdparser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Poller for connecting IS submission folders to FRAG")
+    parser.add_argument('config', metavar="CONFIG.yaml", nargs=1, type=str,
+                        help="poller configuration file")
+#    parser.add_argument('--reeval-all', action='store_const',
+#                        const=True, default=False,
+#                        help="re-evaluate all last submissions of exercises")
+    parser.add_argument('--oneshot', action='store_const',
+                        const=True, default=False,
+                        help="run only one poll, then exit")
+    parser.add_argument('--force', action='extend', type=str, nargs=1,
+                        default=[], metavar="ISPATH",
+                        help="Force submission of exercise from given path "
+                             "even if it was already processed. Can be used "
+                             "multiple times.")
+    return parser
+
+
+class Assignment:
+    RE_ANY = re.compile(".*")
+
+    def __init__(self, raw: dict, name: str, config: Config) -> None:
+        self.name = name
+        self.raw = raw
+        assert "source" in self.raw
+        source = self.raw['source']
+        assert "sources" in config.raw
+        assert source in config.raw["sources"]
+        self.sources = config.raw["sources"][source]
+        self.enabled = self._enabled()
+        self.name_template = self._name_template()
+
+    def __str__(self) -> str:
+        return f"Assignment[{self.name}, enabled = {self.enabled}, " \
+               f"sources = {self.sources} template = {self.name_template}]"
+
+    def _enabled(self) -> bool:
+        en = self.raw.get("enabled", True)
+        if isinstance(en, bool):
+            return en
+
+        now = datetime.today().date()
+        fr = en.get("from", now)
+        to = en.get("to", now)
+        assert isinstance(fr, date)
+        assert isinstance(to, date)
+        return bool(fr <= now <= to)
+
+    def _name_template(self) -> Pattern[str]:
+        if "name template" not in self.raw:
+            return Assignment.RE_ANY
+        raw_name = self.raw["name template"]
+        name, ext = os.path.splitext(raw_name)
+        return re.compile(fr"(\d+-)?(\w+-)?{name}(_[a-z]+)?[.]{ext[1:]}")
+
+
+class Config:
+    def __init__(self, raw: dict) -> None:
+        self.raw = raw
+
+    def interval(self) -> int:
+        return self.raw.get("interval", 60)
+
+    def assignments(self) -> Dict[str, Assignment]:
+        tsks = self.raw.get("assignments", {})
+        assert isinstance(tsks, dict)
+        return {name: Assignment(raw, name, self)
+                for name, raw in tsks.items()}
+
+    def course(self) -> str:
+        return self.raw["course"]
+
+    def frag_db(self) -> str:
+        return self.raw["frag db"]
+
+    def frag_user(self) -> str:
+        return self.raw.get("user") or os.getlogin()
+
+    def connect_db(self) -> psycopg2.connection:
+        return psycopg2.connect(dbname=self.course(), host=self.frag_db(),
+                                user=self.frag_user())
+
+
+def get_asgn_ids(cur: psycopg2.cursor) -> Dict[str, int]:
+    cur.execute("select * from assignment")
+    out: Dict[str, int] = {}
+    for i, name in cur.fetchall():
+        assert isinstance(i, int)
+        assert isinstance(name, str)
+        out[name] = i
+    return out
+
+
+def poll(args: argparse.Namespace, config: Config) -> None:
+    db = config.connect_db()
+    cur = db.cursor()
+    cur.execute("set search_path to frag")
+    asgn_ids = get_asgn_ids(cur)
+
+    isconn = isapi.files.Connection()
+    for asgn in config.assignments().values():
+        if not asgn.enabled:
+            continue
+        if asgn.name not in asgn_ids:
+            fprint(f"Assignment {asgn.name} not in frag, skipping…",
+                   file=sys.stderr)
+            continue
+        fprint(asgn)
+        for ispath in asgn.sources:
+            dirm = isconn.list_directory(ispath)
+            for filem in dirm.entries:
+                if asgn.name_template.fullmatch(filem.shortname):
+                    process_file(asgn, config, db, filem)
+    cur.close()
+
+
+def get_ispath_id(filem: FileMeta, cur: psycopg2.cursor) -> Optional[int]:
+    cur.execute("select (id) from frag_ispol.ispath where path = %s",
+                (filem.ispath,))
+    if cur.rowcount == 0:
+        return None
+    assert cur.rowcount == 1
+    return typing.cast(int, cur.fetchone()[0])
+
+
+def file_processed(filem: FileMeta, db: psycopg2.connection) -> bool:
+    with db.cursor() as cur:
+        ispath_id = get_ispath_id(filem, cur)
+        if ispath_id is None:
+            return False
+        cur.execute("select count(id) from frag_ispol.processed"
+                    "  where ispath_id = %s"
+                    "    and objid = %s"
+                    "    and change_time = %s",
+                    (ispath_id, filem.objid, filem.change_time))
+        return bool(cur.fetchone()[0])
+
+
+def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
+    with db.cursor() as cur:
+        cur.execute("insert into frag_ispol.ispath (path)"
+                    " values (%s)"
+                    " on conflict do nothing"
+                    " returning (id)",
+                    (filem.ispath, ))
+        res = cur.fetchone()
+        ispath_id = res[0] if res is not None else get_ispath_id(filem, cur)
+        assert ispath_id > 0
+        cur.execute("insert into frag_ispol.processed"
+                    " (ispath_id, change_time, objid)"
+                    " values (%s, %s, %s)",
+                    (ispath_id, filem.change_time, filem.objid))
+
+
+def submit_file(filem: FileMeta, db: psycopg2.connection) -> None:
+    pass
+
+
+def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
+                 filem: FileMeta) -> None:
+    fprint("processing", filem.ispath, filem.change_time, filem.objid, "…")
+    if file_processed(filem, db):
+        fprint("(already processed)")
+        return
+    submit_file(filem, db)
+    confirm_file(filem, db)
+    db.commit()
+
+
+def get_config(args: argparse.Namespace) -> Config:
+    try:
+        with open(args.config[0], "r") as config_handle:
+            return Config(yaml.safe_load(config_handle))
+    except OSError:
+        fprint(f"Could not open config {args.config}")
+        sys.exit(2)
+
+
+def poller(args: argparse.Namespace) -> None:
+    stop_signal = False
+
+    def stop(sig: int, stack: Any) -> None:
+        nonlocal stop_signal
+        stop_signal = True
+        fprint(f"cancellation pending (SIG={sig})… ")
+
+    signal.signal(signal.SIGTERM, stop)
+
+    while True:
+        config = get_config(args)
+        interval = config.interval()
+        start = time.perf_counter()
+        poll(args, config)
+        sleep_for = int((max(0, interval - (time.perf_counter() - start))))
+        for _ in range(sleep_for):
+            if stop_signal or args.oneshot:
+                return
+            time.sleep(1)
+        if stop_signal or args.oneshot:
+            return
+
+
+def check_init_db(config: Config) -> None:
+    db = config.connect_db()
+    with db.cursor() as cur:
+        cur.execute("create schema if not exists frag_ispol")
+        cur.execute("create table if not exists frag_ispol.ispath ("
+                    "  id serial primary key,"
+                    "  path bytea not null unique"
+                    ")")
+        cur.execute("create table if not exists frag_ispol.processed ("
+                    "  id serial primary key,"
+                    "  ispath_id integer not null,"
+                    "  change_time timestamp without time zone not null,"
+                    "  objid integer,"
+                    "  constraint processed_ispath_id_ispath_id_fkey"
+                    "    foreign key (ispath_id)"
+                    "      references frag_ispol.ispath(id)"
+                    ")")
+        db.commit()
+    db.close()
+
+
+def fprint(what: Any, *args: Any, **kvargs: Any) -> None:
+    print(what, flush=True, *args, **kvargs)
+
+
+def main() -> None:
+    parser = cmdparser()
+    args = parser.parse_args()
+    fprint(args)
+    check_init_db(get_config(args))
+    poller(args)
+
+
+if __name__ == "__main__":
+    main()
+
+# vim: colorcolumn=80 expandtab sw=4 ts=4
