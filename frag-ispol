@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import isapi.files
 import os
 import os.path
@@ -15,7 +16,7 @@ import yaml
 
 from isapi.files import FileMeta
 from datetime import datetime, date
-from typing import Any, Optional, List, Dict, Pattern
+from typing import Any, Optional, Union, List, Dict, Pattern
 
 
 def cmdparser() -> argparse.ArgumentParser:
@@ -39,6 +40,7 @@ def cmdparser() -> argparse.ArgumentParser:
 
 class Assignment:
     RE_ANY = re.compile(".*")
+    NAME_TEMPLATE = "name template"
 
     def __init__(self, raw: dict, name: str, config: Config) -> None:
         self.name = name
@@ -50,10 +52,17 @@ class Assignment:
         self.sources = config.raw["sources"][source]
         self.enabled = self._enabled()
         self.name_template = self._name_template()
+        self.file_name: Optional[str] = None
+        self.id: Optional[int] = None
 
     def __str__(self) -> str:
-        return f"Assignment[{self.name}, enabled = {self.enabled}, " \
-               f"sources = {self.sources} template = {self.name_template}]"
+        out = f"Assignment[{self.name} enabled = {self.enabled} " \
+              f"sources = {self.sources} template = {self.name_template}"
+        if self.id is not None:
+            out += f" id = {self.id}"
+        if self.file_name is not None:
+            out += f" file_name = {self.file_name}"
+        return out + "]"
 
     def _enabled(self) -> bool:
         en = self.raw.get("enabled", True)
@@ -68,9 +77,9 @@ class Assignment:
         return bool(fr <= now <= to)
 
     def _name_template(self) -> Pattern[str]:
-        if "name template" not in self.raw:
+        if Assignment.NAME_TEMPLATE not in self.raw:
             return Assignment.RE_ANY
-        raw_name = self.raw["name template"]
+        raw_name = self.raw[Assignment.NAME_TEMPLATE]
         name, ext = os.path.splitext(raw_name)
         return re.compile(fr"(\d+-)?(\w+-)?{name}(_[a-z]+)?[.]{ext[1:]}")
 
@@ -89,10 +98,10 @@ class Config:
                 for name, raw in tsks.items()}
 
     def course(self) -> str:
-        return self.raw["course"]
+        return self.raw["course"]  # type: ignore # TODO
 
     def frag_db(self) -> str:
-        return self.raw["frag db"]
+        return self.raw["frag db"]  # type: ignore # TODO
 
     def frag_user(self) -> str:
         return self.raw.get("user") or os.getlogin()
@@ -100,6 +109,12 @@ class Config:
     def connect_db(self) -> psycopg2.connection:
         return psycopg2.connect(dbname=self.course(), host=self.frag_db(),
                                 user=self.frag_user())
+
+
+def sha256(data: Union[str, bytes]) -> bytes:
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    return hashlib.sha256(data).digest()
 
 
 def get_asgn_ids(cur: psycopg2.cursor) -> Dict[str, int]:
@@ -110,6 +125,12 @@ def get_asgn_ids(cur: psycopg2.cursor) -> Dict[str, int]:
         assert isinstance(name, str)
         out[name] = i
     return out
+
+
+def get_asgn_files(asgn_id: int, cur: psycopg2.cursor) -> List[str]:
+    cur.execute("select (name) from assignment_in where assignment_id = %s",
+                (asgn_id,))
+    return [tup[0] for tup in cur.fetchall()]
 
 
 def poll(args: argparse.Namespace, config: Config) -> None:
@@ -126,12 +147,20 @@ def poll(args: argparse.Namespace, config: Config) -> None:
             fprint(f"Assignment {asgn.name} not in frag, skipping…",
                    file=sys.stderr)
             continue
+
+        asgn.id = asgn_ids[asgn.name]
+        files = get_asgn_files(asgn.id, cur)
+        if len(files) != 1:
+            raise Exception(f"Assignment {asgn.name} has {len(files)} files "
+                            "defined in frag, but it needs to have 1.")  # TODO
+        asgn.file_name = files[0]
+
         fprint(asgn)
         for ispath in asgn.sources:
             dirm = isconn.list_directory(ispath)
             for filem in dirm.entries:
                 if asgn.name_template.fullmatch(filem.shortname):
-                    process_file(asgn, config, db, filem)
+                    process_file(asgn, config, db, isconn, filem)
     cur.close()
 
 
@@ -173,17 +202,34 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
                     (ispath_id, filem.change_time, filem.objid))
 
 
-def submit_file(filem: FileMeta, db: psycopg2.connection) -> None:
-    pass
+def submit_file(asgn: Assignment, filem: FileMeta, db: psycopg2.connection,
+                isconn: isapi.files.Connection) -> None:
+    with db.cursor() as cur:
+        cur.execute("insert into submission (author, assignment_id)"
+                    "  values (%s, %s)"
+                    "  returning (id)",
+                    (filem.author, asgn.id))
+        sid = cur.fetchone()[0]
+
+        file_data = isconn.get_file(filem)
+        file_sha = sha256(file_data.data)
+        cur.execute("insert into content (sha, data)"
+                    "  values (%s, %s)"
+                    "  on conflict do nothing",
+                    (file_sha, file_data.data))
+        cur.execute("insert into submission_in"
+                    "  (submission_id, assignment_id, name, content_sha)"
+                    "  values (%s, %s, %s, %s)",
+                    (sid, asgn.id, asgn.file_name, file_sha))
 
 
 def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
-                 filem: FileMeta) -> None:
+                 isconn: isapi.files.Connection, filem: FileMeta) -> None:
     fprint("processing", filem.ispath, filem.change_time, filem.objid, "…")
     if file_processed(filem, db):
         fprint("(already processed)")
         return
-    submit_file(filem, db)
+    submit_file(asgn, filem, db, isconn)
     confirm_file(filem, db)
     db.commit()
 
