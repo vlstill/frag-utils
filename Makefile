@@ -1,4 +1,4 @@
-MYPY_PY = frag-ispol
+MYPY_PY = frag-ispoll
 PY = $(MYPY_PY) common.py
 
 -include local.make
