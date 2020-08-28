@@ -1,8 +1,21 @@
 from __future__ import annotations
+import argparse
 import hashlib
 import os.path
 import psycopg2  # type: ignore
-from typing import Optional, Union, List
+import signal
+import sys
+import time
+import yaml
+
+from datetime import datetime, date
+from typing import Optional, Union, List, Dict, Type, TypeVar, Any, Callable
+
+τ = TypeVar("τ")
+
+
+def fprint(what: Any, *args: Any, **kvargs: Any) -> None:
+    print(what, flush=True, *args, **kvargs)
 
 
 def sha256(data: Union[str, bytes]) -> bytes:
@@ -49,5 +62,127 @@ def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
                         "  (submission_id, assignment_id, name, content_sha)"
                         "  values (%s, %s, %s, %s)",
                         (sid, asgn_id, f.name, file_sha))
+
+
+def cmdparser(description: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('config', metavar="CONFIG.yaml", nargs=1, type=str,
+                        help="poller configuration file")
+#    parser.add_argument('--reeval-all', action='store_const',
+#                        const=True, default=False,
+#                        help="re-evaluate all last submissions of exercises")
+    parser.add_argument('--oneshot', action='store_const',
+                        const=True, default=False,
+                        help="run only one poll, then exit")
+    parser.add_argument('--force', action='extend', type=str, nargs=1,
+                        default=[], metavar="PATH",
+                        help="Force submission of exercise from given path "
+                             "even if it was already processed. Can be used "
+                             "multiple times.")
+    return parser
+
+
+class BaseAssignment:
+    def __init__(self, raw: dict, name: str, config: BaseConfig) -> None:
+        self.name = name
+        self.raw = raw
+        self.enabled = self._enabled()
+        self.id: Optional[int] = None
+
+    def _enabled(self) -> bool:
+        en = self.raw.get("enabled", True)
+        if isinstance(en, bool):
+            return en
+
+        now = datetime.today().date()
+        fr = en.get("from", now)
+        to = en.get("to", now)
+        assert isinstance(fr, date)
+        assert isinstance(to, date)
+        return bool(fr <= now <= to)
+
+
+class BaseConfig:
+    def __init__(self, raw: dict) -> None:
+        self.raw = raw
+
+    @staticmethod
+    def _check(val: Any, typ: Type[τ]) -> τ:
+        assert isinstance(val, typ)
+        return val
+
+    def interval(self) -> int:
+        return BaseConfig._check(self.raw.get("interval", 60), int)
+
+    def _assignments(self) -> dict:
+        return BaseConfig._check(self.raw.get("assignments", {}), dict)
+
+    def course(self) -> str:
+        return BaseConfig._check(self.raw["course"], str)
+
+    def frag_db(self) -> str:
+        return BaseConfig._check(self.raw["frag db"], str)
+
+    def frag_user(self) -> str:
+        return BaseConfig._check(self.raw.get("user") or os.getlogin(), str)
+
+    def connect_db(self) -> psycopg2.connection:
+        return psycopg2.connect(dbname=self.course(), host=self.frag_db(),
+                                user=self.frag_user())
+
+
+τ_config = TypeVar("τ_config", bound=BaseConfig)
+
+
+def get_asgn_ids(db: psycopg2.connection) -> Dict[str, int]:
+    with db.cursor() as cur:
+        cur.execute("select * from assignment")
+        out: Dict[str, int] = {}
+        for i, name in cur.fetchall():
+            assert isinstance(i, int)
+            assert isinstance(name, str)
+            out[name] = i
+        return out
+
+
+def get_asgn_files(asgn_id: int, db: psycopg2.connection) -> List[str]:
+    with db.cursor() as cur:
+        cur.execute("select name from assignment_in where assignment_id = %s",
+                    (asgn_id,))
+        return [tup[0] for tup in cur.fetchall()]
+
+
+def get_config(args: argparse.Namespace, Config: Type[τ_config]) -> τ_config:
+    try:
+        with open(args.config[0], "r") as config_handle:
+            return Config(yaml.safe_load(config_handle))
+    except OSError:
+        fprint(f"Could not open config {args.config}")
+        sys.exit(2)
+
+
+def poller(args: argparse.Namespace, Config: Type[τ_config],
+           poll: Callable[[argparse.Namespace, τ_config], None]) -> None:
+    stop_signal = False
+
+    def stop(sig: int, stack: Any) -> None:
+        nonlocal stop_signal
+        stop_signal = True
+        fprint(f"cancellation pending (SIG={sig})… ")
+
+    signal.signal(signal.SIGTERM, stop)
+
+    while True:
+        config = get_config(args, Config)
+        interval = config.interval()
+        start = time.perf_counter()
+        poll(args, config)
+        sleep_for = int((max(0, interval - (time.perf_counter() - start))))
+        for _ in range(sleep_for):
+            if stop_signal or args.oneshot:
+                return
+            time.sleep(1)
+        if stop_signal or args.oneshot:
+            return
 
 # vim: colorcolumn=80 expandtab sw=4 ts=4

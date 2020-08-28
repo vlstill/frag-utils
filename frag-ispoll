@@ -8,54 +8,34 @@ import os
 import os.path
 import psycopg2  # type: ignore
 import re
-import signal
 import sys
-import time
 import typing
-import yaml
 
+from common import fprint
 from isapi.files import FileMeta
-from datetime import datetime, date
-from typing import Any, Optional, List, Dict, Pattern, TypeVar, Type
+from typing import Optional, Dict, Pattern, TypeVar
 
 τ = TypeVar("τ")
 
 
 def cmdparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Poller for connecting IS submission folders to FRAG")
-    parser.add_argument('config', metavar="CONFIG.yaml", nargs=1, type=str,
-                        help="poller configuration file")
-#    parser.add_argument('--reeval-all', action='store_const',
-#                        const=True, default=False,
-#                        help="re-evaluate all last submissions of exercises")
-    parser.add_argument('--oneshot', action='store_const',
-                        const=True, default=False,
-                        help="run only one poll, then exit")
-    parser.add_argument('--force', action='extend', type=str, nargs=1,
-                        default=[], metavar="ISPATH",
-                        help="Force submission of exercise from given path "
-                             "even if it was already processed. Can be used "
-                             "multiple times.")
-    return parser
+    return common.cmdparser("Poller for connecting IS submission folders "
+                            "to FRAG")
 
 
-class Assignment:
+class Assignment(common.BaseAssignment):
     RE_ANY = re.compile(".*")
     NAME_TEMPLATE = "name template"
 
     def __init__(self, raw: dict, name: str, config: Config) -> None:
-        self.name = name
-        self.raw = raw
+        super().__init__(raw, name, config)
         assert "source" in self.raw
         source = self.raw['source']
         assert "sources" in config.raw
         assert source in config.raw["sources"]
         self.sources = config.raw["sources"][source]
-        self.enabled = self._enabled()
         self.name_template = self._name_template()
         self.file_name: Optional[str] = None
-        self.id: Optional[int] = None
 
     def __str__(self) -> str:
         out = f"Assignment[{self.name} enabled = {self.enabled} " \
@@ -66,18 +46,6 @@ class Assignment:
             out += f" file_name = {self.file_name}"
         return out + "]"
 
-    def _enabled(self) -> bool:
-        en = self.raw.get("enabled", True)
-        if isinstance(en, bool):
-            return en
-
-        now = datetime.today().date()
-        fr = en.get("from", now)
-        to = en.get("to", now)
-        assert isinstance(fr, date)
-        assert isinstance(to, date)
-        return bool(fr <= now <= to)
-
     def _name_template(self) -> Pattern[str]:
         if Assignment.NAME_TEMPLATE not in self.raw:
             return Assignment.RE_ANY
@@ -86,58 +54,18 @@ class Assignment:
         return re.compile(fr"(\d+-)?(\w+-)?{name}(_[a-z]+)?[.]{ext[1:]}")
 
 
-class Config:
-    def __init__(self, raw: dict) -> None:
-        self.raw = raw
-
-    @staticmethod
-    def _check(val: Any, typ: Type[τ]) -> τ:
-        assert isinstance(val, typ)
-        return val
-
-    def interval(self) -> int:
-        return Config._check(self.raw.get("interval", 60), int)
-
+class Config(common.BaseConfig):
     def assignments(self) -> Dict[str, Assignment]:
-        tsks = Config._check(self.raw.get("assignments", {}), dict)
+        asgns = self._assignments()
         return {name: Assignment(raw, name, self)
-                for name, raw in tsks.items()}
-
-    def course(self) -> str:
-        return Config._check(self.raw["course"], str)
-
-    def frag_db(self) -> str:
-        return Config._check(self.raw["frag db"], str)
-
-    def frag_user(self) -> str:
-        return Config._check(self.raw.get("user") or os.getlogin(), str)
-
-    def connect_db(self) -> psycopg2.connection:
-        return psycopg2.connect(dbname=self.course(), host=self.frag_db(),
-                                user=self.frag_user())
-
-
-def get_asgn_ids(cur: psycopg2.cursor) -> Dict[str, int]:
-    cur.execute("select * from assignment")
-    out: Dict[str, int] = {}
-    for i, name in cur.fetchall():
-        assert isinstance(i, int)
-        assert isinstance(name, str)
-        out[name] = i
-    return out
-
-
-def get_asgn_files(asgn_id: int, cur: psycopg2.cursor) -> List[str]:
-    cur.execute("select name from assignment_in where assignment_id = %s",
-                (asgn_id,))
-    return [tup[0] for tup in cur.fetchall()]
+                for name, raw in asgns.items()}
 
 
 def poll(args: argparse.Namespace, config: Config) -> None:
     db = config.connect_db()
     cur = db.cursor()
     cur.execute("set search_path to frag")
-    asgn_ids = get_asgn_ids(cur)
+    asgn_ids = common.get_asgn_ids(db)
 
     isconn = isapi.files.Connection()
     for asgn in config.assignments().values():
@@ -149,7 +77,7 @@ def poll(args: argparse.Namespace, config: Config) -> None:
             continue
 
         asgn.id = asgn_ids[asgn.name]
-        files = get_asgn_files(asgn.id, cur)
+        files = common.get_asgn_files(asgn.id, db)
         if len(files) != 1:
             raise Exception(f"Assignment {asgn.name} has {len(files)} files "
                             "defined in frag, but it needs to have 1.")
@@ -220,39 +148,6 @@ def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
     db.commit()
 
 
-def get_config(args: argparse.Namespace) -> Config:
-    try:
-        with open(args.config[0], "r") as config_handle:
-            return Config(yaml.safe_load(config_handle))
-    except OSError:
-        fprint(f"Could not open config {args.config}")
-        sys.exit(2)
-
-
-def poller(args: argparse.Namespace) -> None:
-    stop_signal = False
-
-    def stop(sig: int, stack: Any) -> None:
-        nonlocal stop_signal
-        stop_signal = True
-        fprint(f"cancellation pending (SIG={sig})… ")
-
-    signal.signal(signal.SIGTERM, stop)
-
-    while True:
-        config = get_config(args)
-        interval = config.interval()
-        start = time.perf_counter()
-        poll(args, config)
-        sleep_for = int((max(0, interval - (time.perf_counter() - start))))
-        for _ in range(sleep_for):
-            if stop_signal or args.oneshot:
-                return
-            time.sleep(1)
-        if stop_signal or args.oneshot:
-            return
-
-
 def check_init_db(config: Config) -> None:
     db = config.connect_db()
     with db.cursor() as cur:
@@ -274,16 +169,12 @@ def check_init_db(config: Config) -> None:
     db.close()
 
 
-def fprint(what: Any, *args: Any, **kvargs: Any) -> None:
-    print(what, flush=True, *args, **kvargs)
-
-
 def main() -> None:
     parser = cmdparser()
     args = parser.parse_args()
     fprint(args)
-    check_init_db(get_config(args))
-    poller(args)
+    check_init_db(common.get_config(args, Config))
+    common.poller(args, Config, poll)
 
 
 if __name__ == "__main__":
