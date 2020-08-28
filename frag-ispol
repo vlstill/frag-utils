@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
+import common
 import isapi.files
 import os
 import os.path
@@ -16,7 +16,7 @@ import yaml
 
 from isapi.files import FileMeta
 from datetime import datetime, date
-from typing import Any, Optional, Union, List, Dict, Pattern, TypeVar, Type
+from typing import Any, Optional, List, Dict, Pattern, TypeVar, Type
 
 τ = TypeVar("τ")
 
@@ -117,12 +117,6 @@ class Config:
                                 user=self.frag_user())
 
 
-def sha256(data: Union[str, bytes]) -> bytes:
-    if isinstance(data, str):
-        data = data.encode("utf-8")
-    return hashlib.sha256(data).digest()
-
-
 def get_asgn_ids(cur: psycopg2.cursor) -> Dict[str, int]:
     cur.execute("select * from assignment")
     out: Dict[str, int] = {}
@@ -209,23 +203,10 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
 
 def submit_file(asgn: Assignment, filem: FileMeta, db: psycopg2.connection,
                 isconn: isapi.files.Connection) -> None:
-    with db.cursor() as cur:
-        cur.execute("insert into submission (author, assignment_id)"
-                    "  values (%s, %s)"
-                    "  returning (id)",
-                    (filem.author, asgn.id))
-        sid = cur.fetchone()[0]
-
-        file_data = isconn.get_file(filem)
-        file_sha = sha256(file_data.data)
-        cur.execute("insert into content (sha, data)"
-                    "  values (%s, %s)"
-                    "  on conflict do nothing",
-                    (file_sha, file_data.data))
-        cur.execute("insert into submission_in"
-                    "  (submission_id, assignment_id, name, content_sha)"
-                    "  values (%s, %s, %s, %s)",
-                    (sid, asgn.id, asgn.file_name, file_sha))
+    file_data = isconn.get_file(filem).data
+    assert asgn.id is not None
+    common.submit_assignment(asgn.id, filem.author, db,
+                             [common.File(asgn.file_name, data=file_data)])
 
 
 def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
