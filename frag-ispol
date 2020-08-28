@@ -16,7 +16,9 @@ import yaml
 
 from isapi.files import FileMeta
 from datetime import datetime, date
-from typing import Any, Optional, Union, List, Dict, Pattern
+from typing import Any, Optional, Union, List, Dict, Pattern, TypeVar, Type
+
+τ = TypeVar("τ")
 
 
 def cmdparser() -> argparse.ArgumentParser:
@@ -88,23 +90,27 @@ class Config:
     def __init__(self, raw: dict) -> None:
         self.raw = raw
 
+    @staticmethod
+    def _check(val: Any, typ: Type[τ]) -> τ:
+        assert isinstance(val, typ)
+        return val
+
     def interval(self) -> int:
-        return self.raw.get("interval", 60)
+        return Config._check(self.raw.get("interval", 60), int)
 
     def assignments(self) -> Dict[str, Assignment]:
-        tsks = self.raw.get("assignments", {})
-        assert isinstance(tsks, dict)
+        tsks = Config._check(self.raw.get("assignments", {}), dict)
         return {name: Assignment(raw, name, self)
                 for name, raw in tsks.items()}
 
     def course(self) -> str:
-        return self.raw["course"]  # type: ignore # TODO
+        return Config._check(self.raw["course"], str)
 
     def frag_db(self) -> str:
-        return self.raw["frag db"]  # type: ignore # TODO
+        return Config._check(self.raw["frag db"], str)
 
     def frag_user(self) -> str:
-        return self.raw.get("user") or os.getlogin()
+        return Config._check(self.raw.get("user") or os.getlogin(), str)
 
     def connect_db(self) -> psycopg2.connection:
         return psycopg2.connect(dbname=self.course(), host=self.frag_db(),
@@ -128,7 +134,7 @@ def get_asgn_ids(cur: psycopg2.cursor) -> Dict[str, int]:
 
 
 def get_asgn_files(asgn_id: int, cur: psycopg2.cursor) -> List[str]:
-    cur.execute("select (name) from assignment_in where assignment_id = %s",
+    cur.execute("select name from assignment_in where assignment_id = %s",
                 (asgn_id,))
     return [tup[0] for tup in cur.fetchall()]
 
@@ -152,10 +158,9 @@ def poll(args: argparse.Namespace, config: Config) -> None:
         files = get_asgn_files(asgn.id, cur)
         if len(files) != 1:
             raise Exception(f"Assignment {asgn.name} has {len(files)} files "
-                            "defined in frag, but it needs to have 1.")  # TODO
+                            "defined in frag, but it needs to have 1.")
         asgn.file_name = files[0]
 
-        fprint(asgn)
         for ispath in asgn.sources:
             dirm = isconn.list_directory(ispath)
             for filem in dirm.entries:
@@ -165,7 +170,7 @@ def poll(args: argparse.Namespace, config: Config) -> None:
 
 
 def get_ispath_id(filem: FileMeta, cur: psycopg2.cursor) -> Optional[int]:
-    cur.execute("select (id) from frag_ispol.ispath where path = %s",
+    cur.execute("select id from frag_ispol.ispath where path = %s",
                 (filem.ispath,))
     if cur.rowcount == 0:
         return None
@@ -225,10 +230,10 @@ def submit_file(asgn: Assignment, filem: FileMeta, db: psycopg2.connection,
 
 def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
                  isconn: isapi.files.Connection, filem: FileMeta) -> None:
-    fprint("processing", filem.ispath, filem.change_time, filem.objid, "…")
     if file_processed(filem, db):
-        fprint("(already processed)")
         return
+    fprint("processing", filem.ispath, filem.change_time, filem.objid, asgn,
+           "…")
     submit_file(asgn, filem, db, isconn)
     confirm_file(filem, db)
     db.commit()
