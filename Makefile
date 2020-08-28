@@ -1,11 +1,12 @@
-PY = frag-ispol
+MYPY_PY = frag-ispol
+PY = $(MYPY_PY) common.py
 
 -include local.make
 
 MYPY ?= mypy
 FLAKE8 ?= flake8
 
-check : $(PY:%=%.mypy)
+check : $(MYPY_PY:%=%.mypy)
 	$(FLAKE8) $(PY)
 
 %.mypy : %
