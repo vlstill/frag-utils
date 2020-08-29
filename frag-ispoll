@@ -58,8 +58,6 @@ class Config(common.BaseConfig):
 
 def poll(args: argparse.Namespace, config: Config) -> None:
     db = config.connect_db()
-    cur = db.cursor()
-    cur.execute("set search_path to frag")
 
     isconn = isapi.files.Connection()
     for asgn in config.assignments(db).values():
@@ -81,7 +79,6 @@ def poll(args: argparse.Namespace, config: Config) -> None:
             for filem in dirm.entries:
                 if asgn.name_template.fullmatch(filem.shortname):
                     process_file(asgn, config, db, isconn, filem)
-    cur.close()
 
 
 def get_ispath_id(filem: FileMeta, cur: psycopg2.cursor) -> Optional[int]:

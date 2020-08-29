@@ -143,8 +143,11 @@ class BaseConfig:
         return BaseConfig._check(self.raw.get("user") or os.getlogin(), str)
 
     def connect_db(self) -> psycopg2.connection:
-        return psycopg2.connect(dbname=self.course(), host=self.frag_db(),
-                                user=self.frag_user())
+        db = psycopg2.connect(dbname=self.course(), host=self.frag_db(),
+                              user=self.frag_user())
+        with db.cursor() as cur:
+            cur.execute("set search_path to frag")
+        return db
 
 
 τ_config = TypeVar("τ_config", bound=BaseConfig)
