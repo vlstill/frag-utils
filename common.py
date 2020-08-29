@@ -201,4 +201,15 @@ def poller(args: argparse.Namespace, Config: Type[τ_config],
         if stop_signal or args.oneshot:
             return
 
+
+def main(cmdparser: Callable[[], argparse.ArgumentParser],
+         Config: Type[τ_config],
+         check_init_db: Callable[[τ_config], None],
+         poll: Callable[[argparse.Namespace, τ_config], None]) -> None:
+    parser = cmdparser()
+    args = parser.parse_args()
+    fprint(args)
+    check_init_db(get_config(args, Config))
+    poller(args, Config, poll)
+
 # vim: colorcolumn=80 expandtab sw=4 ts=4
