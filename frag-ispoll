@@ -82,7 +82,7 @@ def poll(args: argparse.Namespace, config: Config) -> None:
 
 
 def get_ispath_id(filem: FileMeta, cur: psycopg2.cursor) -> Optional[int]:
-    cur.execute("select id from frag_ispol.ispath where path = %s",
+    cur.execute("select id from frag_ispoll.ispath where path = %s",
                 (filem.ispath,))
     if cur.rowcount == 0:
         return None
@@ -95,7 +95,7 @@ def file_processed(filem: FileMeta, db: psycopg2.connection) -> bool:
         ispath_id = get_ispath_id(filem, cur)
         if ispath_id is None:
             return False
-        cur.execute("select count(id) from frag_ispol.processed"
+        cur.execute("select count(*) from frag_ispoll.processed"
                     "  where ispath_id = %s"
                     "    and objid = %s"
                     "    and change_time = %s",
@@ -105,7 +105,7 @@ def file_processed(filem: FileMeta, db: psycopg2.connection) -> bool:
 
 def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
     with db.cursor() as cur:
-        cur.execute("insert into frag_ispol.ispath (path)"
+        cur.execute("insert into frag_ispoll.ispath (path)"
                     " values (%s)"
                     " on conflict do nothing"
                     " returning (id)",
@@ -113,7 +113,7 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
         res = cur.fetchone()
         ispath_id = res[0] if res is not None else get_ispath_id(filem, cur)
         assert ispath_id > 0
-        cur.execute("insert into frag_ispol.processed"
+        cur.execute("insert into frag_ispoll.processed"
                     " (ispath_id, change_time, objid)"
                     " values (%s, %s, %s)",
                     (ispath_id, filem.change_time, filem.objid))
@@ -142,19 +142,20 @@ def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
 def check_init_db(config: Config) -> None:
     db = config.connect_db()
     with db.cursor() as cur:
-        cur.execute("create schema if not exists frag_ispol")
-        cur.execute("create table if not exists frag_ispol.ispath ("
+        cur.execute("create schema if not exists frag_ispoll")
+        cur.execute("create table if not exists frag_ispoll.ispath ("
                     "  id serial primary key,"
                     "  path bytea not null unique"
                     ")")
-        cur.execute("create table if not exists frag_ispol.processed ("
-                    "  id serial primary key,"
+        cur.execute("create table if not exists frag_ispoll.processed ("
                     "  ispath_id integer not null,"
                     "  change_time timestamp without time zone not null,"
                     "  objid integer,"
                     "  constraint processed_ispath_id_ispath_id_fkey"
                     "    foreign key (ispath_id)"
-                    "      references frag_ispol.ispath(id)"
+                    "      references frag_ispoll.ispath(id),"
+                    "  constraint processed_unique"
+                    "    unique (ispath_id, change_time, objid)"
                     ")")
         db.commit()
     db.close()
