@@ -9,7 +9,7 @@ import time
 import yaml
 
 from datetime import datetime, date
-from typing import Optional, Union, List, Dict, Type, TypeVar, Any, Callable
+from typing import Optional, Union, List, Type, TypeVar, Any, Callable
 
 τ = TypeVar("τ")
 
@@ -83,11 +83,17 @@ def cmdparser(description: str) -> argparse.ArgumentParser:
 
 
 class BaseAssignment:
-    def __init__(self, raw: dict, name: str, config: BaseConfig) -> None:
+    def __init__(self, raw: dict, name: str, config: BaseConfig,
+                 db: Optional[psycopg2.connection] = None) -> None:
         self.name = name
         self.raw = raw
         self.enabled = self._enabled()
         self.id: Optional[int] = None
+        self.file_names: Optional[List[str]] = None
+        if db is not None:
+            self.id = get_asgn_id(self.name, db)
+            if self.id is not None:
+                self.file_names = get_asgn_files(self.id, db)
 
     def _enabled(self) -> bool:
         en = self.raw.get("enabled", True)
@@ -100,6 +106,16 @@ class BaseAssignment:
         assert isinstance(fr, date)
         assert isinstance(to, date)
         return bool(fr <= now <= to)
+
+    def _str(self, extra: Optional[str]) -> str:
+        out = f"Assignment[{self.name} enabled = {self.enabled} "
+        if self.id is not None:
+            out += f" id = {self.id}"
+        if self.file_names is not None:
+            out += f" file_names = {self.file_names}"
+        if extra is not None:
+            out += " " + extra
+        return out + "]"
 
 
 class BaseConfig:
@@ -134,15 +150,15 @@ class BaseConfig:
 τ_config = TypeVar("τ_config", bound=BaseConfig)
 
 
-def get_asgn_ids(db: psycopg2.connection) -> Dict[str, int]:
+def get_asgn_id(name: str, db: psycopg2.connection) -> Optional[int]:
     with db.cursor() as cur:
-        cur.execute("select * from assignment")
-        out: Dict[str, int] = {}
-        for i, name in cur.fetchall():
-            assert isinstance(i, int)
-            assert isinstance(name, str)
-            out[name] = i
-        return out
+        cur.execute("select id from assignment where name = %s",
+                    (name,))
+        rec = cur.fetchone()
+        if rec is None:
+            return rec
+        assert isinstance(rec[0], int)
+        return rec[0]
 
 
 def get_asgn_files(asgn_id: int, db: psycopg2.connection) -> List[str]:

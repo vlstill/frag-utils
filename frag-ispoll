@@ -27,24 +27,19 @@ class Assignment(common.BaseAssignment):
     RE_ANY = re.compile(".*")
     NAME_TEMPLATE = "name template"
 
-    def __init__(self, raw: dict, name: str, config: Config) -> None:
-        super().__init__(raw, name, config)
+    def __init__(self, raw: dict, name: str, config: Config,
+                 db: psycopg2.connection) -> None:
+        super().__init__(raw, name, config, db)
         assert "source" in self.raw
         source = self.raw['source']
         assert "sources" in config.raw
         assert source in config.raw["sources"]
         self.sources = config.raw["sources"][source]
         self.name_template = self._name_template()
-        self.file_name: Optional[str] = None
 
     def __str__(self) -> str:
-        out = f"Assignment[{self.name} enabled = {self.enabled} " \
-              f"sources = {self.sources} template = {self.name_template}"
-        if self.id is not None:
-            out += f" id = {self.id}"
-        if self.file_name is not None:
-            out += f" file_name = {self.file_name}"
-        return out + "]"
+        return self._str(f"sources = {self.sources} "
+                         f"template = {self.name_template}")
 
     def _name_template(self) -> Pattern[str]:
         if Assignment.NAME_TEMPLATE not in self.raw:
@@ -55,9 +50,9 @@ class Assignment(common.BaseAssignment):
 
 
 class Config(common.BaseConfig):
-    def assignments(self) -> Dict[str, Assignment]:
+    def assignments(self, db: psycopg2.connection) -> Dict[str, Assignment]:
         asgns = self._assignments()
-        return {name: Assignment(raw, name, self)
+        return {name: Assignment(raw, name, self, db)
                 for name, raw in asgns.items()}
 
 
@@ -65,23 +60,21 @@ def poll(args: argparse.Namespace, config: Config) -> None:
     db = config.connect_db()
     cur = db.cursor()
     cur.execute("set search_path to frag")
-    asgn_ids = common.get_asgn_ids(db)
 
     isconn = isapi.files.Connection()
-    for asgn in config.assignments().values():
+    for asgn in config.assignments(db).values():
         if not asgn.enabled:
             continue
-        if asgn.name not in asgn_ids:
+        if asgn.id is None:
             fprint(f"Assignment {asgn.name} not in frag, skipping…",
                    file=sys.stderr)
             continue
 
-        asgn.id = asgn_ids[asgn.name]
-        files = common.get_asgn_files(asgn.id, db)
-        if len(files) != 1:
-            raise Exception(f"Assignment {asgn.name} has {len(files)} files "
-                            "defined in frag, but it needs to have 1.")
-        asgn.file_name = files[0]
+        assert asgn.file_names is not None
+        if len(asgn.file_names) != 1:
+            raise Exception(f"Assignment {asgn.name} has "
+                            f"{len(asgn.file_names)} files defined in frag,"
+                            " but it needs to have 1.")
 
         for ispath in asgn.sources:
             dirm = isconn.list_directory(ispath)
@@ -133,8 +126,9 @@ def submit_file(asgn: Assignment, filem: FileMeta, db: psycopg2.connection,
                 isconn: isapi.files.Connection) -> None:
     file_data = isconn.get_file(filem).data
     assert asgn.id is not None
+    assert asgn.file_names is not None
     common.submit_assignment(asgn.id, filem.author, db,
-                             [common.File(asgn.file_name, data=file_data)])
+                             [common.File(asgn.file_names[0], data=file_data)])
 
 
 def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
