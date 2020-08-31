@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import hashlib
+import itertools
 import os.path
 import psycopg2  # type: ignore
 import signal
@@ -8,8 +9,10 @@ import sys
 import time
 import yaml
 
+from dataclasses import dataclass
 from datetime import datetime, date
-from typing import Optional, Union, List, Type, TypeVar, Any, Callable
+from typing import Optional, Union, List, Type, TypeVar, Any, Callable, \
+    Iterable
 
 τ = TypeVar("τ")
 
@@ -169,6 +172,34 @@ def get_asgn_files(asgn_id: int, db: psycopg2.connection) -> List[str]:
         cur.execute("select name from assignment_in where assignment_id = %s",
                     (asgn_id,))
         return [tup[0] for tup in cur.fetchall()]
+
+
+@dataclass
+class Person:
+    uid: int
+    login: str
+    name: str
+
+
+def _get_people(table: str, db: psycopg2.connection) -> Iterable[Person]:
+    with db.cursor() as cur:
+        cur.execute(f"select id, login, name from {table}")
+        return (Person(uid, login.tobytes().decode('ascii'), name)
+                for uid, login, name in cur.fetchall())
+
+
+def get_teachers(db: psycopg2.connection) -> Iterable[Person]:
+    return _get_people("teacher_list join person"
+                       "  on (teacher_list.teacher = person.id)", db)
+
+
+def get_students(db: psycopg2.connection) -> Iterable[Person]:
+    return _get_people("enrollment join person "
+                       "  on (enrollment.student = person.id)", db)
+
+
+def get_people(db: psycopg2.connection) -> Iterable[Person]:
+    return itertools.chain(get_teachers(db), get_students(db))
 
 
 def get_config(args: argparse.Namespace, Config: Type[τ_config]) -> τ_config:
