@@ -1,0 +1,17 @@
+frag db: frag-db.fi.muni.cz
+# frag user: xstill # optional, defaults to current unix user
+course: pv264
+interval: 5
+assignments:
+    hw1: # this is also ID of the assignment in frag
+        # enabled: True
+        enabled: # interval only to cut off polling, proper times set in frag
+            from: 2020-08-27
+            to: 2020-09-10
+        # use variable {student_login} to susbtitute login or {student_id} to
+        # substitute university ID (UČO)
+        source: gitlab.fi.muni.cz:pv264/students/2020/{student_login}/hw1
+        # automatically materialise non-existent repositories, defaults to
+        # false
+        materialise: false
+vim: expandtab

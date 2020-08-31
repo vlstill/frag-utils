@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import common
+import gitlab    # type: ignore
+import psycopg2  # type: ignore
+import re
+import sys
+
+from common import fprint
+from datetime import datetime
+from dateutil.parser import parse as parse_date
+from gitlab import Gitlab  # type: ignore
+from gitlab.exceptions import GitlabError  # type: ignore
+from typing import Iterable, Dict, List, Optional, TypeVar
+
+τ = TypeVar("τ")
+RE_SUBMIT_TAG = re.compile("^submit")
+
+
+def cmdparser() -> argparse.ArgumentParser:
+    return common.cmdparser("Poller for connecting git repositories to FRAG")
+
+
+class Assignment(common.BaseAssignment):
+    VAR_STUDENT_LOGIN = "{student_login}"  # noqa: FS003
+    VAR_STUDENT_ID = "{student_id}"        # noqa: FS003
+
+    def __init__(self, raw: dict, name: str, config: Config,
+                 db: psycopg2.connection) -> None:
+        super().__init__(raw, name, config, db)
+        assert "source" in self.raw
+        print(self.raw["source"])
+        host, path = self.raw["source"].split(':', 1)
+        self.gitlab = host
+        self.paths: Dict[int, str] = {}
+        self.materialise = self.raw.get("materialise",
+                                        self.raw.get("materialize", False))
+        assert Assignment.VAR_STUDENT_LOGIN in path or \
+               Assignment.VAR_STUDENT_ID in path
+        for pers in common.get_people(db):
+            self.paths[pers.uid] = path.format(student_id=pers.uid,
+                                               student_login=pers.login)
+
+    def __str__(self) -> str:
+        return self._str(f"gitlab = {self.gitlab} "
+                         f"paths = {self.paths}")
+
+
+class Config(common.BaseConfig):
+    def assignments(self, db: psycopg2.connection) -> Iterable[Assignment]:
+        return (Assignment(raw, name, self, db)
+                for name, raw in self._assignments().items())
+
+
+def init_db(config: Config) -> None:
+    with config.connect_db() as db:
+        with db.cursor() as cur:
+            cur.execute("create schema if not exists frag_gitpoll")
+            cur.execute("create table if not exists frag_gitpoll.path ("
+                        "  id serial primary key,"
+                        "  path bytea not null unique"
+                        ")")
+            cur.execute("create table if not exists frag_gitpoll.processed ("
+                        "  path_id integer not null,"
+                        "  commit_time timestamp without time zone not null,"
+                        "  commit_id text,"
+                        "  constraint processed_path_id_path_id_fkey"
+                        "    foreign key (path_id)"
+                        "      references frag_gitpoll.path(id),"
+                        "  constraint processed_unique"
+                        "    unique (path_id, commit_time, commit_id)"
+                        ")")
+            db.commit()
+
+
+def get_gitlab(name: str) -> Gitlab:
+    with open(f"{name}.key", 'r') as h:
+        auth = h.read().strip()
+        return Gitlab(f"https://{name}", private_token=auth)
+
+
+def poll(args: argparse.Namespace, config: Config) -> None:
+    with config.connect_db() as db:
+        for asgn in config.assignments(db):
+            if not asgn.enabled:
+                continue
+            print(asgn)
+            gl = get_gitlab(asgn.gitlab)
+            for author, path in asgn.paths.items():
+                process_path(asgn, author, path, gl, db)
+
+
+def head(it: Iterable[τ]) -> Optional[τ]:
+    for i in it:
+        return i
+    return None
+
+
+def get_repo(path: str, gl: Gitlab, materialise: bool) \
+        -> Optional[gitlab.Project]:
+    """
+    Returns Gitlab project handle, or None if the path does not exist
+    or cannot be materialised.
+    """
+    try:
+        return gl.projects.get(path)
+    except GitlabError as ex:
+        if ex.response_code == 404:
+            assert not materialise, "NOT IMPLEMENTED"
+            return None
+        return None
+
+
+def commit_processed(path: str, commit: str, time: datetime,
+                     db: psycopg2.connection) -> bool:
+    with db.cursor() as cur:
+        cur.execute("select count(*) from frag_gitpoll.processed"
+                    "  join frag_gitpoll.path on (path.id = processed.path_id)"
+                    "    where path = %s and commit_id = %s and"
+                    "      commit_time = %s",
+                    (path, commit, time))
+        return bool(cur.fetchone()[0])
+
+
+def commit_confirm(path: str, commit: str, time: datetime,
+                   db: psycopg2.connection) -> None:
+    with db.cursor() as cur:
+        cur.execute("""
+            insert into frag_gitpoll.path (path) values (%s)
+              on conflict do nothing
+              returning id
+            """, (path,))
+        row = cur.fetchone()
+        if row is None:
+            cur.execute("select id from frag_gitpoll.path where path = %s",
+                        (path,))
+            row = cur.fetchone()
+        path_id = row[0]
+        cur.execute("""
+            insert into frag_gitpoll.processed
+              (path_id, commit_time, commit_id)
+              values (%s, %s, %s)
+            """, (path_id, time, commit))
+
+
+def commit_submit(asgn: Assignment, author: int, repo: gitlab.Project,
+                  commit: str, time: datetime,
+                  db: psycopg2.connection) -> None:
+    files: List[common.File] = []
+
+    # NOTE: not recursive
+    repo_files: Dict[str, str] = {}
+    for entry in repo.repository_tree(ref=commit, as_list=False):
+        assert entry["type"] == 'blob'
+        repo_files[entry["path"]] = entry["id"]
+
+    assert asgn.id is not None
+    assert asgn.file_names is not None
+    for file_name in asgn.file_names:
+        if file_name in repo_files:
+            data = repo.repository_raw_blob(repo_files[file_name])
+        else:
+            fprint(f"W: Missing file {repo.path}/{file_name}", file=sys.stderr)
+            data = bytes()
+        files.append(common.File(file_name, data=data))
+
+    return common.submit_assignment(asgn.id, author, db, files)
+
+
+def process_path(asgn: Assignment, author: int, path: str, gl: Gitlab,
+                 db: psycopg2.connection) -> None:
+    repo = get_repo(path, gl, asgn.materialise)
+    if repo is None:
+        fprint(f"W: skipping nonexistent {path}")
+        return
+
+    fprint(f"Processing {path}…")
+    for tag in repo.tags.list():
+        if not RE_SUBMIT_TAG.search(tag.name):
+            continue
+
+        commit = tag.commit["id"]
+        # note: this is the real date, not the one given by author
+        # (authored_date)
+        time = parse_date(tag.commit['created_at'])
+
+        if commit_processed(path, commit, time, db):
+            continue
+
+        print(f"  tag {tag.name}")
+        commit_submit(asgn, author, repo, commit, time, db)
+        commit_confirm(path, commit, time, db)
+        db.commit()
+
+
+if __name__ == "__main__":
+    common.main(cmdparser, Config, init_db, poll)
+
+# vim: colorcolumn=80 expandtab sw=4 ts=4
