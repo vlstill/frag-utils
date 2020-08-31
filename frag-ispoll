@@ -13,7 +13,7 @@ import typing
 
 from common import fprint
 from isapi.files import FileMeta
-from typing import Optional, Dict, Pattern, TypeVar
+from typing import Optional, Pattern, TypeVar, Iterable
 
 τ = TypeVar("τ")
 
@@ -50,17 +50,17 @@ class Assignment(common.BaseAssignment):
 
 
 class Config(common.BaseConfig):
-    def assignments(self, db: psycopg2.connection) -> Dict[str, Assignment]:
+    def assignments(self, db: psycopg2.connection) -> Iterable[Assignment]:
         asgns = self._assignments()
-        return {name: Assignment(raw, name, self, db)
-                for name, raw in asgns.items()}
+        return (Assignment(raw, name, self, db)
+                for name, raw in asgns.items())
 
 
 def poll(args: argparse.Namespace, config: Config) -> None:
     db = config.connect_db()
 
     isconn = isapi.files.Connection()
-    for asgn in config.assignments(db).values():
+    for asgn in config.assignments(db):
         if not asgn.enabled:
             continue
         if asgn.id is None:
