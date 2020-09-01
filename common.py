@@ -47,12 +47,21 @@ class File:
 
 
 def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
-                      files: List[File]) -> None:
+                      files: List[File],
+                      timestamp: Optional[datetime] = None) -> None:
     with db.cursor() as cur:
-        cur.execute("insert into submission (author, assignment_id)"
-                    "  values (%s, %s)"
-                    "  returning (id)",
-                    (author, asgn_id))
+        if timestamp is not None:
+            cur.execute("""
+                insert into submission (author, assignment_id, stamp)
+                  values (%s, %s, %s)
+                  returning (id)
+                  """, (author, asgn_id, timestamp))
+        else:
+            cur.execute("""
+                insert into submission (author, assignment_id)
+                  values (%s, %s)
+                  returning (id)
+                  """, (author, asgn_id))
         sid = cur.fetchone()[0]
 
         for f in files:
