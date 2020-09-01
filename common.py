@@ -89,11 +89,11 @@ def cmdparser(description: str) -> argparse.ArgumentParser:
     parser.add_argument('--oneshot', action='store_const',
                         const=True, default=False,
                         help="run only one poll, then exit")
-    parser.add_argument('--force', action='extend', type=str, nargs=1,
-                        default=[], metavar="PATH",
-                        help="Force submission of exercise from given path "
-                             "even if it was already processed. Can be used "
-                             "multiple times.")
+#    parser.add_argument('--force', action='extend', type=str, nargs=1,
+#                        default=[], metavar="PATH",
+#                        help="Force submission of exercise from given path "
+#                             "even if it was already processed. Can be used "
+#                             "multiple times.")
     return parser
 
 
