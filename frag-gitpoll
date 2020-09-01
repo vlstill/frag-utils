@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import common
 import gitlab    # type: ignore
+import posixpath
 import psycopg2  # type: ignore
 import re
 import sys
@@ -13,7 +14,7 @@ from datetime import datetime
 from dateutil.parser import parse as parse_date
 from gitlab import Gitlab  # type: ignore
 from gitlab.exceptions import GitlabError  # type: ignore
-from typing import Iterable, Dict, List, Optional, TypeVar
+from typing import Iterable, Dict, List, Optional, Tuple, TypeVar
 
 τ = TypeVar("τ")
 RE_SUBMIT_TAG = re.compile("^submit")
@@ -42,6 +43,7 @@ class Assignment(common.BaseAssignment):
         for pers in common.get_people(db):
             self.paths[pers.uid] = path.format(student_id=pers.uid,
                                                student_login=pers.login)
+        self.raw_path = path
 
     def __str__(self) -> str:
         return self._str(f"gitlab = {self.gitlab} "
@@ -88,8 +90,92 @@ def poll(args: argparse.Namespace, config: Config) -> None:
                 continue
             print(asgn)
             gl = get_gitlab(asgn.gitlab)
+            if asgn.materialise:
+                materialise(asgn, gl, db)
             for author, path in asgn.paths.items():
                 process_path(asgn, author, path, gl, db)
+
+
+def materialise(asgn: Assignment, gl: Gitlab, db: psycopg2.connection) -> None:
+    if (Assignment.VAR_STUDENT_LOGIN in asgn.raw_path
+            and Assignment.VAR_STUDENT_ID is asgn.raw_path) \
+        or (Assignment.VAR_STUDENT_LOGIN not in asgn.raw_path
+            and Assignment.VAR_STUDENT_ID not in asgn.raw_path):
+        raise Exception(f"Exactly one of {Assignment.VAR_STUDENT_LOGIN} and "
+                        f"{Assignment.VAR_STUDENT_ID} must be present in "
+                        "the source path")
+
+    if Assignment.VAR_STUDENT_ID in asgn.raw_path:
+        splitter = Assignment.VAR_STUDENT_ID
+
+        def get_pers(p: common.Person) -> str:
+            return str(p.uid)
+    else:
+        splitter = Assignment.VAR_STUDENT_LOGIN
+
+        def get_pers(p: common.Person) -> str:
+            return p.login
+
+    prefix, suffix = asgn.raw_path.split(f"/{splitter}/")
+    if not suffix:
+        raise Exception("Cannot materialise paths in which variable is the "
+                        f"last segment: {asgn.raw_path}")
+
+    materialise_path(gl, prefix)
+    for pers in common.get_people(db):
+        if not pers.is_teacher:
+            extra_logins = [(pers.login, gitlab.DEVELOPER_ACCESS)]
+        else:
+            extra_logins = []
+        materialise_path(gl, posixpath.join(prefix, get_pers(pers)),
+                         extra_logins)
+        materialise_repo(gl, posixpath.join(prefix, get_pers(pers), suffix))
+
+
+def group_exists(gl: Gitlab, path: str) -> bool:
+    try:
+        gl.groups.get(path)
+        return True
+    except GitlabError as ex:
+        if ex.response_code == 404:
+            return False
+        raise
+
+
+def materialise_path(gl: Gitlab, path: str,
+                     extra_logins: Optional[List[Tuple[str, int]]] = None) \
+                     -> None:
+    if extra_logins is None:
+        extra_logins = []
+
+    to_create: List[str] = []
+    while not group_exists(gl, path) and path:
+        path, basename = posixpath.split(path)
+        to_create.append(basename)
+    if not path:
+        raise Exception(f"Cannot materialise root group {to_create[0]}")
+
+    for entry in to_create:
+        group = gl.groups.get(path)
+        new_gr = gl.groups.create({'name': entry, 'path': entry,
+                                   'parent_id': group.id})
+        path = posixpath.join(path, entry)
+
+        for login, acc in extra_logins:
+            user = head(gl.users.list(username=login))
+            if user is None:
+                fprint(f"W: Could not find user {login}, ignoring")
+                continue
+            new_gr.members.create({'user_id': user.id, 'access_level': acc})
+
+
+def materialise_repo(gl: Gitlab, path: str) -> None:
+    if get_repo(gl, path) is not None:
+        return
+    materialise_path(gl, posixpath.dirname(path))
+    group = gl.groups.get(posixpath.dirname(path))
+    gl.projects.create({'name': posixpath.basename(path),
+                        'namespace_id': group.id})
 
 
 def head(it: Iterable[τ]) -> Optional[τ]:
@@ -98,7 +184,7 @@ def head(it: Iterable[τ]) -> Optional[τ]:
     return None
 
 
-def get_repo(path: str, gl: Gitlab, materialise: bool) \
+def get_repo(gl: Gitlab, path: str) \
         -> Optional[gitlab.Project]:
     """
     Returns Gitlab project handle, or None if the path does not exist
@@ -108,9 +194,8 @@ def get_repo(path: str, gl: Gitlab, materialise: bool) \
         return gl.projects.get(path)
     except GitlabError as ex:
         if ex.response_code == 404:
-            assert not materialise, "NOT IMPLEMENTED"
             return None
-        return None
+        raise
 
 
 def commit_processed(path: str, commit: str, time: datetime,
@@ -171,7 +256,7 @@ def commit_submit(asgn: Assignment, author: int, repo: gitlab.Project,
 
 def process_path(asgn: Assignment, author: int, path: str, gl: Gitlab,
                  db: psycopg2.connection) -> None:
-    repo = get_repo(path, gl, asgn.materialise)
+    repo = get_repo(gl, path)
     if repo is None:
         fprint(f"W: skipping nonexistent {path}")
         return
