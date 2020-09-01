@@ -166,7 +166,7 @@ def commit_submit(asgn: Assignment, author: int, repo: gitlab.Project,
             data = bytes()
         files.append(common.File(file_name, data=data))
 
-    return common.submit_assignment(asgn.id, author, db, files)
+    return common.submit_assignment(asgn.id, author, db, files, time)
 
 
 def process_path(asgn: Assignment, author: int, path: str, gl: Gitlab,
