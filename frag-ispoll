@@ -125,7 +125,8 @@ def submit_file(asgn: Assignment, filem: FileMeta, db: psycopg2.connection,
     assert asgn.id is not None
     assert asgn.file_names is not None
     common.submit_assignment(asgn.id, filem.author, db,
-                             [common.File(asgn.file_names[0], data=file_data)])
+                             [common.File(asgn.file_names[0], data=file_data)],
+                             filem.change_time)
 
 
 def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
