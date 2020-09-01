@@ -4,6 +4,7 @@ import hashlib
 import itertools
 import os.path
 import psycopg2  # type: ignore
+import re
 import signal
 import sys
 import time
@@ -15,6 +16,8 @@ from typing import Optional, Union, List, Type, TypeVar, Any, Callable, \
     Iterable
 
 τ = TypeVar("τ")
+
+RE_INTERVAL = re.compile(r"([0-9]+) *(s|m|h)")
 
 
 def fprint(what: Any, *args: Any, **kvargs: Any) -> None:
@@ -140,7 +143,18 @@ class BaseConfig:
         return val
 
     def interval(self) -> int:
-        return BaseConfig._check(self.raw.get("interval", 60), int)
+        raw_interval = self.raw.get("interval", 300)
+        if isinstance(raw_interval, int):
+            return raw_interval
+        if isinstance(raw_interval, str):
+            m = RE_INTERVAL.fullmatch(raw_interval)
+            if not m:
+                raise Exception("Invalid interval specification: "
+                                f"{raw_interval}, must be integer with an "
+                                "optional suffix 's' (seconds), 'm' (minutes) "
+                                "or 'h' (hours)")
+            return int(m[1]) * {'s': 1, 'm': 60, 'h': 3600}[m[2]]
+        raise Exception(f"Not an interval: {raw_interval}")
 
     def _assignments(self) -> dict:
         return BaseConfig._check(self.raw.get("assignments", {}), dict)
