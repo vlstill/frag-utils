@@ -1,7 +1,7 @@
 frag db: frag-db.fi.muni.cz
 # frag user: xstill # optional, defaults to current unix user
 course: iv074
-interval: 5
+interval: 5m
 sources:
     week01:
         - /el/fi/podzim2020/IV074/ode/ode_week01a

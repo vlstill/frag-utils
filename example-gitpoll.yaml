@@ -1,7 +1,7 @@
 frag db: frag-db.fi.muni.cz
 # frag user: xstill # optional, defaults to current unix user
 course: pv264
-interval: 5
+interval: 5m
 assignments:
     hw1:  # this is also ID of the assignment in frag
         enabled: true
