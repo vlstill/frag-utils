@@ -188,23 +188,25 @@ class Person:
     uid: int
     login: str
     name: str
+    is_teacher: bool
 
 
-def _get_people(table: str, db: psycopg2.connection) -> Iterable[Person]:
+def _get_people(table: str, is_teacher: bool, db: psycopg2.connection) \
+        -> Iterable[Person]:
     with db.cursor() as cur:
         cur.execute(f"select id, login, name from {table}")
-        return (Person(uid, login.tobytes().decode('ascii'), name)
+        return (Person(uid, login.tobytes().decode('ascii'), name, is_teacher)
                 for uid, login, name in cur.fetchall())
 
 
 def get_teachers(db: psycopg2.connection) -> Iterable[Person]:
     return _get_people("teacher_list join person"
-                       "  on (teacher_list.teacher = person.id)", db)
+                       "  on (teacher_list.teacher = person.id)", True, db)
 
 
 def get_students(db: psycopg2.connection) -> Iterable[Person]:
     return _get_people("enrollment join person "
-                       "  on (enrollment.student = person.id)", db)
+                       "  on (enrollment.student = person.id)", False, db)
 
 
 def get_people(db: psycopg2.connection) -> Iterable[Person]:
