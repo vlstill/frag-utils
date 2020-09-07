@@ -141,25 +141,24 @@ def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
 
 
 def check_init_db(config: Config) -> None:
-    db = config.connect_db()
-    with db.cursor() as cur:
-        cur.execute("create schema if not exists frag_ispoll")
-        cur.execute("create table if not exists frag_ispoll.ispath ("
-                    "  id serial primary key,"
-                    "  path bytea not null unique"
-                    ")")
-        cur.execute("create table if not exists frag_ispoll.processed ("
-                    "  ispath_id integer not null,"
-                    "  change_time timestamp without time zone not null,"
-                    "  objid integer,"
-                    "  constraint processed_ispath_id_ispath_id_fkey"
-                    "    foreign key (ispath_id)"
-                    "      references frag_ispoll.ispath(id),"
-                    "  constraint processed_unique"
-                    "    unique (ispath_id, change_time, objid)"
-                    ")")
-        db.commit()
-    db.close()
+    with config.connect_db() as db:
+        common.create_schema_if_not_exists("frag_ispoll", db)
+        with db.cursor() as cur:
+            cur.execute("create table if not exists frag_ispoll.ispath ("
+                        "  id serial primary key,"
+                        "  path bytea not null unique"
+                        ")")
+            cur.execute("create table if not exists frag_ispoll.processed ("
+                        "  ispath_id integer not null,"
+                        "  change_time timestamp without time zone not null,"
+                        "  objid integer,"
+                        "  constraint processed_ispath_id_ispath_id_fkey"
+                        "    foreign key (ispath_id)"
+                        "      references frag_ispoll.ispath(id),"
+                        "  constraint processed_unique"
+                        "    unique (ispath_id, change_time, objid)"
+                        ")")
+            db.commit()
 
 
 if __name__ == "__main__":
