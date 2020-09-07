@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import getpass
 import hashlib
 import itertools
 import os.path
@@ -166,7 +167,9 @@ class BaseConfig:
         return BaseConfig._check(self.raw["frag db"], str)
 
     def frag_user(self) -> str:
-        return BaseConfig._check(self.raw.get("user") or os.getlogin(), str)
+        if "user" in self.raw:
+            return BaseConfig._check(self.raw["user"], str)
+        return getpass.getuser()
 
     def connect_db(self) -> psycopg2.connection:
         db = psycopg2.connect(dbname=self.course(), host=self.frag_db(),
