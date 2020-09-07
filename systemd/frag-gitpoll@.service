@@ -1,0 +1,22 @@
+[Unit]
+Description=frag-gitpoll service
+
+[Service]
+Type=simple
+WorkingDirectory=/var/frag/%i/
+ExecStartPre=/usr/bin/kinit -t /var/frag/%i/krb5_gitpoll.keytab frag_gitpoll_%i/%H
+ExecStart=/var/frag/utils/frag-gitpoll /var/frag/%i/gitpoll.yaml
+User=frag_gitpoll_%i
+Group=frag_gitpoll
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+KillMode=process
+KillSignal=TERM
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target
+
+# vim: ft=systemd
