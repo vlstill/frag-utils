@@ -58,8 +58,8 @@ class Config(common.BaseConfig):
 
 def init_db(config: Config) -> None:
     with config.connect_db() as db:
+        common.create_schema_if_not_exists("frag_gitpoll", db)
         with db.cursor() as cur:
-            cur.execute("create schema if not exists frag_gitpoll")
             cur.execute("create table if not exists frag_gitpoll.path ("
                         "  id serial primary key,"
                         "  path bytea not null unique"
