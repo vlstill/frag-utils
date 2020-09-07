@@ -1,0 +1,24 @@
+[Unit]
+Description=frag-eval service (instantiate as frag-eval@COURSE_eval_N, e.g. frag-eval@pv264_eval_0)
+
+[Service]
+Type=forking
+Environment=PATH=/var/frag/%i:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/var/frag/%i/env
+WorkingDirectory=/var/frag/%i/
+ExecStartPre=/usr/bin/kinit -t /var/frag/%i/krb5.keytab %i/%H
+ExecStart=/var/frag/%i/frag-eval daemon --dir /tmp/%i --debug
+User=%i
+Group=%i
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+KillMode=control-group
+KillSignal=TERM
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target
+
+# vim: ft=systemd
