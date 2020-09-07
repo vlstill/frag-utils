@@ -230,6 +230,19 @@ def get_people(db: psycopg2.connection) -> Iterable[Person]:
     return itertools.chain(get_teachers(db), get_students(db))
 
 
+def create_schema_if_not_exists(name: str, db: psycopg2.connection) -> None:
+    """Creates a schema if it does not exist, but in a way that does not
+    violate permissions if the schema already exists
+    (unlike CREATE SCHEMA IF NOT EXISTS command)."""
+    with db.cursor() as cur:
+        cur.execute("""
+            select count(*) from information_schema.schemata
+              where schema_name = %s
+            """, (name,))
+        if not bool(cur.fetchone()[0]):
+            cur.execute("create schema %s", (name,))
+
+
 def get_config(args: argparse.Namespace, Config: Type[τ_config]) -> τ_config:
     try:
         with open(args.config[0], "r") as config_handle:
