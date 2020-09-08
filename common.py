@@ -13,6 +13,7 @@ import yaml
 
 from dataclasses import dataclass
 from datetime import datetime, date
+from enum import Enum, auto
 from typing import Optional, Union, List, Type, TypeVar, Any, Callable, \
     Iterable
 
@@ -50,9 +51,16 @@ class File:
             self.name = name
 
 
+class EvalReq(Enum):
+    Yes = auto()
+    No = auto()
+    TeacherInactiveOnly = auto()
+
+
 def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
                       files: List[File],
-                      timestamp: Optional[datetime] = None) -> None:
+                      timestamp: Optional[datetime] = None,
+                      eval_req: EvalReq = EvalReq.TeacherInactiveOnly) -> None:
     with db.cursor() as cur:
         if timestamp is not None:
             cur.execute("""
@@ -78,6 +86,30 @@ def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
                         "  (submission_id, assignment_id, name, content_sha)"
                         "  values (%s, %s, %s, %s)",
                         (sid, asgn_id, f.name, file_sha))
+
+        if eval_req is EvalReq.TeacherInactiveOnly:
+            teachers = {t.uid for t in get_teachers(db)}
+            if author in teachers:
+                eval_req = EvalReq.Yes
+        if eval_req is EvalReq.Yes:
+            request_evaluation(asgn_id, sid, db)
+
+
+def request_evaluation(asgn_id: int, submission_id: int,
+                       db: psycopg2.connection) -> None:
+    with db.cursor() as cur:
+        cur.execute("""
+            select id from current_suite
+              where assignment_id = %s and not active
+            """, (asgn_id,))
+        fetch = cur.fetchone()
+        if fetch is None:
+            return
+        suite_id = fetch[0]
+        cur.execute("""
+            insert into eval_req (submission_id, suite_id) values (%s, %s)
+            """, (submission_id, suite_id))
+        cur.execute("notify eval_req")
 
 
 def cmdparser(description: str) -> argparse.ArgumentParser:
