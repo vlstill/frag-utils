@@ -19,3 +19,5 @@ grant select on teacher_list to frag_{POLL}_{COURSE};
 grant select on enrollment to frag_{POLL}_{COURSE};
 grant select on person to frag_{POLL}_{COURSE};
 grant usage on submission_id_seq to frag_{POLL}_{COURSE};
+grant select on current_suite to frag_{POLL}_{COURSE};
+grant select, insert on eval_req to frag_{POLL}_{COURSE};
