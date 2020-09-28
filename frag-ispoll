@@ -51,7 +51,7 @@ class Assignment(common.BaseAssignment):
             assert "sources" in config.raw
             assert source in config.raw["sources"]
             self.sources = config.raw["sources"][source]
-        self.name_template = self.raw.get('name template')
+        self.name_template: Optional[str] = self.raw.get('name template')
         self.multifile = MultiFile.parse(self.raw.get('multifile', 'disabled'))
 
     def __str__(self) -> str:
