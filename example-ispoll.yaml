@@ -12,7 +12,12 @@ assignments:
         # enabled: # interval only to cut off polling, proper times set in frag
         #     from: 2020-08-27
         #     to: 2020-09-30
-        source: week01
+
+        # set source to list defined in sources
+        # source: week01
+        # or directly to a folder (starting with /)
+        source: /el/fi/podzim2020/IV074/ode/ode_week01a
+
         # The following name_template accepts
         # (UCO-)?(NAME-)?task01(_ALT_PATTERN)?.py where ALT_PATTERN is a random
         # string added by IS when the same file name is inserted more than

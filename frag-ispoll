@@ -32,9 +32,12 @@ class Assignment(common.BaseAssignment):
         super().__init__(raw, name, config, db)
         assert "source" in self.raw
         source = self.raw['source']
-        assert "sources" in config.raw
-        assert source in config.raw["sources"]
-        self.sources = config.raw["sources"][source]
+        if source.startswith('/'):
+            self.sources = [source]
+        else:
+            assert "sources" in config.raw
+            assert source in config.raw["sources"]
+            self.sources = config.raw["sources"][source]
         self.name_template = self._name_template()
 
     def __str__(self) -> str:
