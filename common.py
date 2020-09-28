@@ -199,8 +199,8 @@ class BaseConfig:
         return BaseConfig._check(self.raw["frag db"], str)
 
     def frag_user(self) -> str:
-        if "user" in self.raw:
-            return BaseConfig._check(self.raw["user"], str)
+        if "frag user" in self.raw:
+            return BaseConfig._check(self.raw["frag user"], str)
         return getpass.getuser()
 
     def connect_db(self) -> psycopg2.connection:
