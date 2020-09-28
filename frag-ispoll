@@ -153,13 +153,16 @@ def collect_submissions(isconn: isapi.files.Connection,
                         -> List[Submission]:
     submissions: Dict[int, Submission] = {}
     for ispath in asgn.sources:
-        dirm = isconn.list_directory(ispath)
-        for filem in dirm.entries:
-            if asgn.match(filem):
-                if filem.author in submissions:
-                    submissions[filem.author].add_file(db, filem)
-                else:
-                    submissions[filem.author] = Submission(db, asgn, filem)
+        try:
+            dirm = isconn.list_directory(ispath)
+            for filem in dirm.entries:
+                if asgn.match(filem):
+                    if filem.author in submissions:
+                        submissions[filem.author].add_file(db, filem)
+                    else:
+                        submissions[filem.author] = Submission(db, asgn, filem)
+        except isapi.files.FileDoesNotExistException:
+            fprint(f"W: Directory does not exist: {ispath}", file=sys.stderr)
 
     return [sub for sub in submissions.values() if sub.is_todo()]
 
