@@ -1,3 +1,4 @@
+begin;
 create role frag_{POLL}_{COURSE} login;
 grant frag_{POLL}_{COURSE} to current_user with admin option;
 create schema if not exists frag_{POLL};
@@ -26,3 +27,4 @@ grant select on person to frag_{POLL}_{COURSE};
 grant usage on submission_pkey_seq to frag_{POLL}_{COURSE};
 grant select on current_suite to frag_{POLL}_{COURSE};
 grant select, insert on eval_req to frag_{POLL}_{COURSE};
+commit;
