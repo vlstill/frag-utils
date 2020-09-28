@@ -26,7 +26,23 @@ assignments:
         #
         # It it is not set, any file in the given directory will match this
         # taks.
-        name template: task01.py
+        # name template: task01.py
+
+        # Multi-file assignments can be submitted if explicitly enabled
+        # (defaults to 'disabled')
+        #
+        # -   'disabled': disable multi-file assigments, there must be only one
+        #     file for this assignment in frag
+        # -   'any': submit if any of the files specified in frag is found;
+        #     submits all found files together (even the once already
+        #     submitted)
+        # -   'all': submit only if all files specifed in frag are present
+        #
+        # You cannot specify 'name template' and 'multifile' at once.
+        multifile: any # or 'disabled', 'all'
+    week01_task02:
+        enabled: True
+        source: week01
     week01_nonexistent:
         enabled: true
         source: week01

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import enum
 import common
 import isapi.files
 import os
@@ -11,9 +12,11 @@ import re
 import sys
 import typing
 
+from dataclasses import dataclass
+from datetime import datetime
 from common import fprint
 from isapi.files import FileMeta
-from typing import Optional, Pattern, TypeVar, Iterable
+from typing import Optional, TypeVar, Iterable, Dict, List
 
 τ = TypeVar("τ")
 
@@ -23,9 +26,19 @@ def cmdparser() -> argparse.ArgumentParser:
                             "to FRAG")
 
 
+class MultiFile(enum.Enum):
+    Disabled = enum.auto()
+    Any = enum.auto()
+    All = enum.auto()
+
+    @staticmethod
+    def parse(raw: str) -> MultiFile:
+        raw = raw[0].upper() + raw[1:].lower()
+        return MultiFile.__members__[raw]
+
+
 class Assignment(common.BaseAssignment):
     RE_ANY = re.compile(".*")
-    NAME_TEMPLATE = "name template"
 
     def __init__(self, raw: dict, name: str, config: Config,
                  db: psycopg2.connection) -> None:
@@ -38,18 +51,38 @@ class Assignment(common.BaseAssignment):
             assert "sources" in config.raw
             assert source in config.raw["sources"]
             self.sources = config.raw["sources"][source]
-        self.name_template = self._name_template()
+        self.name_template = self.raw.get('name template')
+        self.multifile = MultiFile.parse(self.raw.get('multifile', 'disabled'))
 
     def __str__(self) -> str:
         return self._str(f"sources = {self.sources} "
-                         f"template = {self.name_template}")
+                         f"template = {self.name_template} "
+                         f"multifile = {self.multifile}")
 
-    def _name_template(self) -> Pattern[str]:
-        if Assignment.NAME_TEMPLATE not in self.raw:
-            return Assignment.RE_ANY
-        raw_name = self.raw[Assignment.NAME_TEMPLATE]
-        name, ext = os.path.splitext(raw_name)
-        return re.compile(fr"(\d+-)?(\w+-)?{name}(_[a-z]+)?[.]{ext[1:]}")
+    def canonic_file_name(self, filem: FileMeta) -> Optional[str]:
+        assert self.file_names is not None
+        if self.name_template is None \
+                and self.multifile is MultiFile.Disabled:
+            return self.file_names[0]
+
+        if self.name_template is not None:
+            if Assignment._match_template(self.name_template,
+                                          filem.shortname):
+                return self.name_template
+
+        for name in self.file_names:
+            if Assignment._match_template(name, filem.shortname):
+                return name
+        return None
+
+    def match(self, filem: FileMeta) -> bool:
+        return self.canonic_file_name(filem) is not None
+
+    @staticmethod
+    def _match_template(raw_name_template: str, real_name: str) -> bool:
+        name, ext = os.path.splitext(raw_name_template)
+        return re.fullmatch(fr"(\d+-)?(\w+-)?{name}(_[a-z]+)?[.]{ext[1:]}",
+                            real_name) is not None
 
 
 class Config(common.BaseConfig):
@@ -57,6 +90,40 @@ class Config(common.BaseConfig):
         asgns = self._assignments()
         return (Assignment(raw, name, self, db)
                 for name, raw in asgns.items())
+
+
+@dataclass
+class Submission:
+    person_id: int
+    timestamp: datetime
+    files: Dict[str, FileMeta]
+    dirty: bool
+
+    def __init__(self, db: psycopg2.connection, asgn: Assignment,
+                 first_file: FileMeta) -> None:
+        self.person_id = first_file.author
+        self.timestamp = first_file.change_time
+        name = asgn.canonic_file_name(first_file)
+        assert name is not None
+        self.files = {name: first_file}
+        self.dirty = not file_processed(first_file, db)
+        self.asgn = asgn
+
+    def add_file(self, db: psycopg2.connection, filem: FileMeta) -> None:
+        assert self.person_id == filem.author
+        name = self.asgn.canonic_file_name(filem)
+        assert name is not None
+        if name not in self.files \
+                or self.files[name].change_time < filem.change_time:
+            self.timestamp = max(self.timestamp, filem.change_time)
+            self.files[name] = filem
+            self.dirty = self.dirty or not file_processed(filem, db)
+
+    def is_todo(self) -> bool:
+        if self.asgn.multifile is not MultiFile.All:
+            return self.dirty
+        assert self.asgn.file_names is not None
+        return self.dirty and len(self.files) == len(self.asgn.file_names)
 
 
 def poll(args: argparse.Namespace, config: Config) -> None:
@@ -72,16 +139,29 @@ def poll(args: argparse.Namespace, config: Config) -> None:
             continue
 
         assert asgn.file_names is not None
-        if len(asgn.file_names) != 1:
+        if len(asgn.file_names) != 1 and asgn.multifile is MultiFile.Disabled:
             raise Exception(f"Assignment {asgn.name} has "
                             f"{len(asgn.file_names)} files defined in frag,"
-                            " but it needs to have 1.")
+                            " but it needs to have 1 (no multifile set).")
 
-        for ispath in asgn.sources:
-            dirm = isconn.list_directory(ispath)
-            for filem in dirm.entries:
-                if asgn.name_template.fullmatch(filem.shortname):
-                    process_file(asgn, config, db, isconn, filem)
+        for sub in collect_submissions(isconn, db, asgn):
+            process_submission(config, db, isconn, sub)
+
+
+def collect_submissions(isconn: isapi.files.Connection,
+                        db: psycopg2.connection, asgn: Assignment) \
+                        -> List[Submission]:
+    submissions: Dict[int, Submission] = {}
+    for ispath in asgn.sources:
+        dirm = isconn.list_directory(ispath)
+        for filem in dirm.entries:
+            if asgn.match(filem):
+                if filem.author in submissions:
+                    submissions[filem.author].add_file(db, filem)
+                else:
+                    submissions[filem.author] = Submission(db, asgn, filem)
+
+    return [sub for sub in submissions.values() if sub.is_todo()]
 
 
 def get_ispath_id(filem: FileMeta, cur: psycopg2.cursor) -> Optional[int]:
@@ -118,28 +198,25 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
         assert ispath_id > 0
         cur.execute("insert into frag_ispoll.processed"
                     " (ispath_id, change_time, objid)"
-                    " values (%s, %s, %s)",
+                    " values (%s, %s, %s)"
+                    " on conflict do nothing",
                     (ispath_id, filem.change_time, filem.objid))
 
 
-def submit_file(asgn: Assignment, filem: FileMeta, db: psycopg2.connection,
-                isconn: isapi.files.Connection) -> None:
-    file_data = isconn.get_file(filem).data
-    assert asgn.id is not None
-    assert asgn.file_names is not None
-    common.submit_assignment(asgn.id, filem.author, db,
-                             [common.File(asgn.file_names[0], data=file_data)],
-                             filem.change_time)
+def process_submission(config: Config, db: psycopg2.connection,
+                       isconn: isapi.files.Connection, sub: Submission) \
+                       -> None:
+    fprint("processing", sub, "…")
+    assert sub.asgn.id is not None
+    assert sub.asgn.file_names is not None
+    common.submit_assignment(sub.asgn.id, sub.person_id, db,
+                             [common.File(name,
+                                          data=isconn.get_file(filem).data)
+                              for name, filem in sub.files.items()],
+                             sub.timestamp)
 
-
-def process_file(asgn: Assignment, config: Config, db: psycopg2.connection,
-                 isconn: isapi.files.Connection, filem: FileMeta) -> None:
-    if file_processed(filem, db):
-        return
-    fprint("processing", filem.ispath, filem.change_time, filem.objid, asgn,
-           "…")
-    submit_file(asgn, filem, db, isconn)
-    confirm_file(filem, db)
+    for filem in sub.files.values():
+        confirm_file(filem, db)
     db.commit()
 
 
