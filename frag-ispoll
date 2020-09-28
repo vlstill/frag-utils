@@ -140,9 +140,11 @@ def poll(args: argparse.Namespace, config: Config) -> None:
 
         assert asgn.file_names is not None
         if len(asgn.file_names) != 1 and asgn.multifile is MultiFile.Disabled:
-            raise Exception(f"Assignment {asgn.name} has "
-                            f"{len(asgn.file_names)} files defined in frag,"
-                            " but it needs to have 1 (no multifile set).")
+            fprint(f"W: Assignment {asgn.name} has "
+                   f"{len(asgn.file_names)} files defined in frag,"
+                   " but it needs to have 1 (no multifile set). Skipping…",
+                   file=sys.stderr)
+            continue
 
         for sub in collect_submissions(isconn, db, asgn):
             process_submission(config, db, isconn, sub)
