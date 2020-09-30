@@ -38,6 +38,10 @@ def to_utc(local: datetime) -> datetime:
     return local.astimezone(utc)
 
 
+def to_utc_strip(local: datetime) -> datetime:
+    return to_utc(local).replace(tzinfo=None)
+
+
 class File:
     def __init__(self, name: Optional[str] = None, path: Optional[str] = None,
                  data: Optional[Union[bytes, str]] = None) -> None:

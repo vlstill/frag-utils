@@ -15,7 +15,7 @@ from dateutil.parser import parse as parse_date
 from gitlab import Gitlab  # type: ignore
 from gitlab.exceptions import GitlabError  # type: ignore
 from typing import Iterable, Dict, List, Optional, Tuple, TypeVar
-from common import to_utc
+from common import to_utc_strip
 
 τ = TypeVar("τ")
 RE_SUBMIT_TAG = re.compile("^submit")
@@ -206,7 +206,7 @@ def commit_processed(path: str, commit: str, time: datetime,
                     "  join frag_gitpoll.path on (path.id = processed.path_id)"
                     "    where path = %s and commit_id = %s and"
                     "      commit_time = %s",
-                    (path, commit, to_utc(time)))
+                    (path, commit, to_utc_strip(time)))
         return bool(cur.fetchone()[0])
 
 
@@ -228,7 +228,7 @@ def commit_confirm(path: str, commit: str, time: datetime,
             insert into frag_gitpoll.processed
               (path_id, commit_time, commit_id)
               values (%s, %s, %s)
-            """, (path_id, to_utc(time), commit))
+            """, (path_id, to_utc_strip(time), commit))
 
 
 def commit_submit(asgn: Assignment, author: int, repo: gitlab.Project,
