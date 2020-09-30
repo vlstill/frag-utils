@@ -77,7 +77,7 @@ def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
                 insert into submission (author, assignment_id, stamp)
                   values (%s, %s, %s)
                   returning (id)
-                  """, (author, asgn_id, to_utc(timestamp)))
+                  """, (author, asgn_id, to_utc_strip(timestamp)))
         else:
             cur.execute("""
                 insert into submission (author, assignment_id)
