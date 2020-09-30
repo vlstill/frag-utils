@@ -17,6 +17,7 @@ from datetime import datetime
 from common import fprint
 from isapi.files import FileMeta
 from typing import Optional, TypeVar, Iterable, Dict, List
+from common import to_utc
 
 τ = TypeVar("τ")
 
@@ -187,7 +188,7 @@ def file_processed(filem: FileMeta, db: psycopg2.connection) -> bool:
                     "  where ispath_id = %s"
                     "    and objid = %s"
                     "    and change_time = %s",
-                    (ispath_id, filem.objid, filem.change_time))
+                    (ispath_id, filem.objid, to_utc(filem.change_time)))
         return bool(cur.fetchone()[0])
 
 
@@ -205,7 +206,7 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
                     " (ispath_id, change_time, objid)"
                     " values (%s, %s, %s)"
                     " on conflict do nothing",
-                    (ispath_id, filem.change_time, filem.objid))
+                    (ispath_id, to_utc(filem.change_time), filem.objid))
 
 
 def process_submission(config: Config, db: psycopg2.connection,

@@ -16,6 +16,8 @@ from datetime import datetime, date
 from enum import Enum, auto
 from typing import Optional, Union, List, Type, TypeVar, Any, Callable, \
     Iterable
+from pytz import utc
+
 
 τ = TypeVar("τ")
 
@@ -30,6 +32,10 @@ def sha256(data: Union[str, bytes]) -> bytes:
     if isinstance(data, str):
         data = data.encode("utf-8")
     return hashlib.sha256(data).digest()
+
+
+def to_utc(local: datetime) -> datetime:
+    return local.astimezone(utc)
 
 
 class File:
@@ -67,7 +73,7 @@ def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
                 insert into submission (author, assignment_id, stamp)
                   values (%s, %s, %s)
                   returning (id)
-                  """, (author, asgn_id, timestamp))
+                  """, (author, asgn_id, to_utc(timestamp)))
         else:
             cur.execute("""
                 insert into submission (author, assignment_id)
