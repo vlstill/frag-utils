@@ -242,7 +242,7 @@ def check_init_db(config: Config) -> None:
                         "    foreign key (ispath_id)"
                         "      references frag_ispoll.ispath(id),"
                         "  constraint processed_unique"
-                        "    unique (ispath_id, change_time, objid)"
+                        "    unique (ispath_id, author, change_time)"
                         ")")
             db.commit()
 
