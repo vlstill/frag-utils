@@ -186,9 +186,9 @@ def file_processed(filem: FileMeta, db: psycopg2.connection) -> bool:
             return False
         cur.execute("select count(*) from frag_ispoll.processed"
                     "  where ispath_id = %s"
-                    "    and objid = %s"
+                    "    and author = %s"
                     "    and change_time = %s",
-                    (ispath_id, filem.objid, to_utc_strip(filem.change_time)))
+                    (ispath_id, filem.author, to_utc_strip(filem.change_time)))
         return bool(cur.fetchone()[0])
 
 
@@ -203,10 +203,10 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
         ispath_id = res[0] if res is not None else get_ispath_id(filem, cur)
         assert ispath_id > 0
         cur.execute("insert into frag_ispoll.processed"
-                    " (ispath_id, change_time, objid)"
+                    " (ispath_id, author, change_time)"
                     " values (%s, %s, %s)"
                     " on conflict do nothing",
-                    (ispath_id, to_utc_strip(filem.change_time), filem.objid))
+                    (ispath_id, filem.author, to_utc_strip(filem.change_time)))
 
 
 def process_submission(config: Config, db: psycopg2.connection,
@@ -237,7 +237,7 @@ def check_init_db(config: Config) -> None:
             cur.execute("create table if not exists frag_ispoll.processed ("
                         "  ispath_id integer not null,"
                         "  change_time timestamp without time zone not null,"
-                        "  objid integer,"
+                        "  author integer,"
                         "  constraint processed_ispath_id_ispath_id_fkey"
                         "    foreign key (ispath_id)"
                         "      references frag_ispoll.ispath(id),"
