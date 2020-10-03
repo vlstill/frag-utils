@@ -282,7 +282,7 @@ def create_schema_if_not_exists(name: str, db: psycopg2.connection) -> None:
               where schema_name = %s
             """, (name,))
         if not bool(cur.fetchone()[0]):
-            cur.execute("create schema %s", (name,))
+            cur.execute(f"create schema {name}")
 
 
 def get_config(args: argparse.Namespace, Config: Type[τ_config]) -> τ_config:
