@@ -33,7 +33,6 @@ class Assignment(common.BaseAssignment):
                  db: psycopg2.connection) -> None:
         super().__init__(raw, name, config, db)
         assert "source" in self.raw
-        print(self.raw["source"])
         host, path = self.raw["source"].split(':', 1)
         self.gitlab = host
         self.paths: Dict[int, str] = {}
@@ -93,7 +92,7 @@ def poll(args: argparse.Namespace, config: Config) -> None:
                 fprint(f"Assignment {asgn.name} not in frag, skipping…",
                        file=sys.stderr)
                 continue
-            print(asgn)
+            fprint(asgn)
             gl = get_gitlab(asgn.gitlab)
             if asgn.materialise:
                 materialise(asgn, gl, db)
@@ -279,7 +278,7 @@ def process_path(asgn: Assignment, author: int, path: str, gl: Gitlab,
         if commit_processed(path, commit, time, db):
             continue
 
-        print(f"  tag {tag.name}")
+        fprint(f"  tag {tag.name}")
         commit_submit(asgn, author, repo, commit, time, db)
         commit_confirm(path, commit, time, db)
         db.commit()
