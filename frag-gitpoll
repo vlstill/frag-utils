@@ -89,6 +89,10 @@ def poll(args: argparse.Namespace, config: Config) -> None:
         for asgn in config.assignments(db):
             if not asgn.enabled:
                 continue
+            if asgn.id is None:
+                fprint(f"Assignment {asgn.name} not in frag, skipping…",
+                       file=sys.stderr)
+                continue
             print(asgn)
             gl = get_gitlab(asgn.gitlab)
             if asgn.materialise:
