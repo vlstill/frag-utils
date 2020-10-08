@@ -193,7 +193,8 @@ def file_processed(filem: FileMeta, db: psycopg2.connection) -> bool:
         cur.execute("select count(*) from frag_ispoll.processed"
                     "  where ispath_id = %s"
                     "    and author = %s"
-                    "    and change_time = %s",
+                    "    and change_time = %s"
+                    "    and evaluated = true",
                     (ispath_id, filem.author, to_utc_strip(filem.change_time)))
         return bool(cur.fetchone()[0])
 
