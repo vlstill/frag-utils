@@ -89,7 +89,8 @@ def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
                     sid = sid_row[0]
                     break
                 else:
-                    fprint(f"W: Retrying {asgn_id} for {author}, {timestamp} → {utc_stamp}")
+                    fprint(f"W: Retrying {asgn_id} for {author}, {timestamp} "
+                           f"→ {utc_stamp}")
         else:
             cur.execute("""
                 insert into submission (author, assignment_id)
