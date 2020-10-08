@@ -307,6 +307,14 @@ def get_config(args: argparse.Namespace, Config: Type[τ_config]) -> τ_config:
         sys.exit(2)
 
 
+def add_timestamp_to_processed(cur: psycopg2.cursor, poller: str) -> None:
+    cur.execute(f"alter table frag_{poller}poll.processed"
+                "  add column if not exists timestamp"
+                "    timestamp without time zone")
+    cur.execute(f"alter table frag_{poller}poll.processed"
+                "  alter column timestamp set default frag.utc_now()")
+
+
 def poller(args: argparse.Namespace, Config: Type[τ_config],
            poll: Callable[[argparse.Namespace, τ_config], None]) -> None:
     stop_signal = False

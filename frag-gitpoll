@@ -74,6 +74,7 @@ def init_db(config: Config) -> None:
                         "  constraint processed_unique"
                         "    unique (path_id, commit_time, commit_id)"
                         ")")
+            common.add_timestamp_to_processed(cur, "git")
             db.commit()
 
 

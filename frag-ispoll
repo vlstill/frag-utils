@@ -244,6 +244,7 @@ def check_init_db(config: Config) -> None:
                         "  constraint processed_unique"
                         "    unique (ispath_id, author, change_time)"
                         ")")
+            common.add_timestamp_to_processed(cur, "is")
             db.commit()
 
 
