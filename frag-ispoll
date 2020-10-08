@@ -152,6 +152,7 @@ def poll(args: argparse.Namespace, config: Config) -> None:
             process_submission(config, db, isconn, sub)
         for filem in extra:
             confirm_file(filem, db, evaluated=False)
+            db.commit()
 
 
 def collect_submissions(isconn: isapi.files.Connection,
