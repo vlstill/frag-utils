@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from common import fprint
 from isapi.files import FileMeta
-from typing import Optional, TypeVar, Iterable, Dict, List
+from typing import Optional, TypeVar, Iterable, Dict, List, Tuple
 from common import to_utc_strip
 
 τ = TypeVar("τ")
@@ -147,14 +147,18 @@ def poll(args: argparse.Namespace, config: Config) -> None:
                    file=sys.stderr)
             continue
 
-        for sub in collect_submissions(isconn, db, asgn):
+        submissions, extra = collect_submissions(isconn, db, asgn)
+        for sub in submissions:
             process_submission(config, db, isconn, sub)
+        for filem in extra:
+            confirm_file(filem, db, evaluated=False)
 
 
 def collect_submissions(isconn: isapi.files.Connection,
                         db: psycopg2.connection, asgn: Assignment) \
-                        -> List[Submission]:
+                        -> Tuple[List[Submission], List[FileMeta]]:
     submissions: Dict[int, Submission] = {}
+    unmatched: List[FileMeta] = []
     for ispath in asgn.sources:
         try:
             dirm = isconn.list_directory(ispath)
@@ -164,10 +168,12 @@ def collect_submissions(isconn: isapi.files.Connection,
                         submissions[filem.author].add_file(db, filem)
                     else:
                         submissions[filem.author] = Submission(db, asgn, filem)
+                else:
+                    unmatched.append(filem)
         except isapi.files.FileDoesNotExistException:
             fprint(f"W: Directory does not exist: {ispath}", file=sys.stderr)
 
-    return [sub for sub in submissions.values() if sub.is_todo()]
+    return ([sub for sub in submissions.values() if sub.is_todo()], unmatched)
 
 
 def get_ispath_id(filem: FileMeta, cur: psycopg2.cursor) -> Optional[int]:
@@ -192,7 +198,8 @@ def file_processed(filem: FileMeta, db: psycopg2.connection) -> bool:
         return bool(cur.fetchone()[0])
 
 
-def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
+def confirm_file(filem: FileMeta, db: psycopg2.connection,
+                 evaluated: bool = True) -> None:
     with db.cursor() as cur:
         cur.execute("insert into frag_ispoll.ispath (path)"
                     " values (%s)"
@@ -203,10 +210,11 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection) -> None:
         ispath_id = res[0] if res is not None else get_ispath_id(filem, cur)
         assert ispath_id > 0
         cur.execute("insert into frag_ispoll.processed"
-                    " (ispath_id, author, change_time)"
-                    " values (%s, %s, %s)"
+                    " (ispath_id, author, change_time, evaluated)"
+                    " values (%s, %s, %s, %s)"
                     " on conflict do nothing",
-                    (ispath_id, filem.author, to_utc_strip(filem.change_time)))
+                    (ispath_id, filem.author, to_utc_strip(filem.change_time),
+                     evaluated))
 
 
 def process_submission(config: Config, db: psycopg2.connection,
@@ -245,6 +253,9 @@ def check_init_db(config: Config) -> None:
                         "    unique (ispath_id, author, change_time)"
                         ")")
             common.add_timestamp_to_processed(cur, "is")
+            cur.execute("alter table frag_ispoll.processed"
+                        "  add column if not exists evaluated"
+                        "    boolean default true")
             db.commit()
 
 
