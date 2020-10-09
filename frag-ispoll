@@ -244,20 +244,19 @@ def check_init_db(config: Config) -> None:
                         "  id serial primary key,"
                         "  path bytea not null unique"
                         ")")
-            cur.execute("create table if not exists frag_ispoll.processed ("
-                        "  ispath_id integer not null,"
-                        "  change_time timestamp without time zone not null,"
-                        "  author integer,"
-                        "  constraint processed_ispath_id_ispath_id_fkey"
-                        "    foreign key (ispath_id)"
-                        "      references frag_ispoll.ispath(id),"
-                        "  constraint processed_unique"
-                        "    unique (ispath_id, author, change_time)"
-                        ")")
+            cur.execute("""
+                create table if not exists frag_ispoll.processed (
+                  ispath_id integer not null,
+                  change_time timestamp without time zone not null,
+                  author integer,
+                  evaluated boolean default true,
+                  constraint processed_ispath_id_ispath_id_fkey
+                    foreign key (ispath_id)
+                      references frag_ispoll.ispath(id),
+                  constraint processed_unique
+                    unique (ispath_id, author, change_time, evaluated)
+                )""")
             common.add_timestamp_to_processed(cur, "is")
-            cur.execute("alter table frag_ispoll.processed"
-                        "  add column if not exists evaluated"
-                        "    boolean default true")
             db.commit()
 
 
