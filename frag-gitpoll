@@ -9,12 +9,11 @@ import psycopg2  # type: ignore
 import re
 import sys
 
-from common import fprint
 from datetime import datetime
 from dateutil.parser import parse as parse_date
 from gitlab import Gitlab  # type: ignore
 from gitlab.exceptions import GitlabError  # type: ignore
-from typing import Iterable, Dict, List, Optional, Tuple, TypeVar
+from typing import Iterable, Dict, List, Optional, Tuple, TypeVar, Any
 from common import to_utc_strip
 
 τ = TypeVar("τ")
@@ -51,6 +50,9 @@ class Assignment(common.BaseAssignment):
 
 
 class Config(common.BaseConfig):
+    def __init__(self, raw: dict, args: Any) -> None:
+        super().__init__(raw, args, "git")
+
     def assignments(self, db: psycopg2.connection) -> Iterable[Assignment]:
         return (Assignment(raw, name, self, db)
                 for name, raw in self._assignments().items())
@@ -90,18 +92,19 @@ def poll(args: argparse.Namespace, config: Config) -> None:
             if not asgn.enabled:
                 continue
             if asgn.id is None:
-                fprint(f"Assignment {asgn.name} not in frag, skipping…",
-                       file=sys.stderr)
+                config.logger.info(f"Assignment {asgn.name} not in frag, "
+                                   "skipping…")
                 continue
-            fprint(asgn)
+            config.logger.debug(asgn)
             gl = get_gitlab(asgn.gitlab)
             if asgn.materialise:
-                materialise(asgn, gl, db)
+                materialise(config, asgn, gl, db)
             for author, path in asgn.paths.items():
                 process_path(asgn, author, path, gl, db)
 
 
-def materialise(asgn: Assignment, gl: Gitlab, db: psycopg2.connection) -> None:
+def materialise(config: Config, asgn: Assignment, gl: Gitlab,
+                db: psycopg2.connection) -> None:
     if (Assignment.VAR_STUDENT_LOGIN in asgn.raw_path
             and Assignment.VAR_STUDENT_ID is asgn.raw_path) \
         or (Assignment.VAR_STUDENT_LOGIN not in asgn.raw_path
@@ -126,15 +129,16 @@ def materialise(asgn: Assignment, gl: Gitlab, db: psycopg2.connection) -> None:
         raise Exception("Cannot materialise paths in which variable is the "
                         f"last segment: {asgn.raw_path}")
 
-    materialise_path(gl, prefix)
+    materialise_path(config, gl, prefix)
     for pers in common.get_people(db):
         if not pers.is_teacher:
             extra_logins = [(pers.login, gitlab.DEVELOPER_ACCESS)]
         else:
             extra_logins = []
-        materialise_path(gl, posixpath.join(prefix, get_pers(pers)),
+        materialise_path(config, gl, posixpath.join(prefix, get_pers(pers)),
                          extra_logins)
-        materialise_repo(gl, posixpath.join(prefix, get_pers(pers), suffix))
+        materialise_repo(config, gl, posixpath.join(prefix, get_pers(pers),
+                         suffix))
 
 
 def group_exists(gl: Gitlab, path: str) -> bool:
@@ -147,7 +151,7 @@ def group_exists(gl: Gitlab, path: str) -> bool:
         raise
 
 
-def materialise_path(gl: Gitlab, path: str,
+def materialise_path(config: Config, gl: Gitlab, path: str,
                      extra_logins: Optional[List[Tuple[str, int]]] = None) \
                      -> None:
     if extra_logins is None:
@@ -169,15 +173,15 @@ def materialise_path(gl: Gitlab, path: str,
         for login, acc in extra_logins:
             user = head(gl.users.list(username=login))
             if user is None:
-                fprint(f"W: Could not find user {login}, ignoring")
+                config.logger.warning(f"Could not find user {login}, ignoring")
                 continue
             new_gr.members.create({'user_id': user.id, 'access_level': acc})
 
 
-def materialise_repo(gl: Gitlab, path: str) -> None:
+def materialise_repo(config: Config, gl: Gitlab, path: str) -> None:
     if get_repo(gl, path) is not None:
         return
-    materialise_path(gl, posixpath.dirname(path))
+    materialise_path(config, gl, posixpath.dirname(path))
     group = gl.groups.get(posixpath.dirname(path))
     gl.projects.create({'name': posixpath.basename(path),
                         'namespace_id': group.id})
@@ -252,7 +256,7 @@ def commit_submit(asgn: Assignment, author: int, repo: gitlab.Project,
         if file_name in repo_files:
             data = repo.repository_raw_blob(repo_files[file_name])
         else:
-            fprint(f"W: Missing file {repo.path}/{file_name}", file=sys.stderr)
+            db.logger.warning(f"Missing file {repo.path}/{file_name}")
             data = bytes()
         files.append(common.File(file_name, data=data))
 
@@ -263,10 +267,10 @@ def process_path(asgn: Assignment, author: int, path: str, gl: Gitlab,
                  db: psycopg2.connection) -> None:
     repo = get_repo(gl, path)
     if repo is None:
-        fprint(f"W: skipping nonexistent {path}")
+        db.logger.warning(f"skipping nonexistent {path}")
         return
 
-    fprint(f"Processing {path}…")
+    db.logger.info(f"Processing {path}…")
     for tag in repo.tags.list():
         if not RE_SUBMIT_TAG.search(tag.name):
             continue
@@ -279,7 +283,7 @@ def process_path(asgn: Assignment, author: int, path: str, gl: Gitlab,
         if commit_processed(path, commit, time, db):
             continue
 
-        fprint(f"  tag {tag.name}")
+        db.logger.info(f"  tag {tag.name}")
         commit_submit(asgn, author, repo, commit, time, db)
         commit_confirm(path, commit, time, db)
         db.commit()

@@ -3,6 +3,7 @@ import argparse
 import getpass
 import hashlib
 import itertools
+import logging
 import os.path
 import psycopg2  # type: ignore
 import re
@@ -14,6 +15,8 @@ import yaml
 from dataclasses import dataclass
 from datetime import datetime, date
 from enum import Enum, auto
+from systemd.journal import JournalHandler  # type: ignore
+from psycopg2.extras import LoggingConnection  # type: ignore
 from typing import Optional, Union, List, Type, TypeVar, Any, Callable, \
     Iterable
 from pytz import utc
@@ -22,10 +25,6 @@ from pytz import utc
 τ = TypeVar("τ")
 
 RE_INTERVAL = re.compile(r"([0-9]+) *(s|m|h)")
-
-
-def fprint(what: Any, *args: Any, **kvargs: Any) -> None:
-    print(what, flush=True, *args, **kvargs)
 
 
 def sha256(data: Union[str, bytes]) -> bytes:
@@ -89,8 +88,8 @@ def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
                     sid = sid_row[0]
                     break
                 else:
-                    fprint(f"W: Retrying {asgn_id} for {author}, {timestamp} "
-                           f"→ {utc_stamp}")
+                    db.logger.warning(f"Retrying {asgn_id} for {author}, "
+                                      f"{timestamp} → {utc_stamp}")
         else:
             cur.execute("""
                 insert into submission (author, assignment_id)
@@ -146,6 +145,17 @@ def cmdparser(description: str) -> argparse.ArgumentParser:
     parser.add_argument('--oneshot', action='store_const',
                         const=True, default=False,
                         help="run only one poll, then exit")
+    parser.add_argument('--dry-run', action='store_const',
+                        const=True, default=False,
+                        help="do not commit any changes to the database, "
+                             "implies --verbose and --one-shot")
+    parser.add_argument('--verbose', action='store_const',
+                        const=True, default=False,
+                        help="produce verbose output")
+    parser.add_argument('--journal', action='store_const',
+                        const=True, default=False,
+                        help="log to systemd journal")
+
 #    parser.add_argument('--force', action='extend', type=str, nargs=1,
 #                        default=[], metavar="PATH",
 #                        help="Force submission of exercise from given path "
@@ -191,8 +201,14 @@ class BaseAssignment:
 
 
 class BaseConfig:
-    def __init__(self, raw: dict) -> None:
+    def __init__(self, raw: dict, cmdargs: argparse.Namespace, typ: str = "")\
+            -> None:
         self.raw = raw
+        self.verbose = cmdargs.verbose
+        self.dry_run = cmdargs.dry_run
+        self.logger = logging.getLogger(f"frag-{typ}poll")
+        if self.verbose:
+            self.logger.setLevel(logging.DEBUG)
 
     @staticmethod
     def _check(val: Any, typ: Type[τ]) -> τ:
@@ -227,11 +243,23 @@ class BaseConfig:
             return BaseConfig._check(self.raw["frag user"], str)
         return getpass.getuser()
 
+    def _fake_commit(self) -> None:
+        self.logger.debug("commit skipped")
+
     def connect_db(self) -> psycopg2.connection:
+        confa = None
+        if self.verbose:
+            confa = LoggingConnection
         db = psycopg2.connect(dbname=self.course(), host=self.frag_db(),
-                              user=self.frag_user())
+                              user=self.frag_user(), connection_factory=confa)
+        if self.verbose:
+            db.initialize(self.logger)
         with db.cursor() as cur:
             cur.execute("set search_path to frag")
+        db.logger = self.logger
+        if self.dry_run:
+            self.logger.debug("Monkey-pathing connection to disable commits")
+            db.commit = lambda: self._fake_commit()
         return db
 
 
@@ -302,9 +330,10 @@ def create_schema_if_not_exists(name: str, db: psycopg2.connection) -> None:
 def get_config(args: argparse.Namespace, Config: Type[τ_config]) -> τ_config:
     try:
         with open(args.config[0], "r") as config_handle:
-            return Config(yaml.safe_load(config_handle))
+            return Config(yaml.safe_load(config_handle), args)
     except OSError:
-        fprint(f"Could not open config {args.config}")
+        print(f"Could not open config {args.config}",
+              flush=True, file=sys.stderr)
         sys.exit(2)
 
 
@@ -319,11 +348,12 @@ def add_timestamp_to_processed(cur: psycopg2.cursor, poller: str) -> None:
 def poller(args: argparse.Namespace, Config: Type[τ_config],
            poll: Callable[[argparse.Namespace, τ_config], None]) -> None:
     stop_signal = False
+    config = get_config(args, Config)
 
     def stop(sig: int, stack: Any) -> None:
         nonlocal stop_signal
         stop_signal = True
-        fprint(f"cancellation pending (SIG={sig})… ")
+        config.logger.info(f"cancellation pending (SIG={sig})… ")
 
     signal.signal(signal.SIGTERM, stop)
 
@@ -341,14 +371,34 @@ def poller(args: argparse.Namespace, Config: Type[τ_config],
             return
 
 
+def setup_logging(args: argparse.Namespace) -> None:
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    if args.journal:
+        handler = JournalHandler()
+        formatter = logging.Formatter('%(message)s')
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+        formatter = logging.Formatter('%(levelname)s: %(message)s')
+
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
+
+
 def main(cmdparser: Callable[[], argparse.ArgumentParser],
          Config: Type[τ_config],
          check_init_db: Callable[[τ_config], None],
          poll: Callable[[argparse.Namespace, τ_config], None]) -> None:
     parser = cmdparser()
     args = parser.parse_args()
-    fprint(args)
-    check_init_db(get_config(args, Config))
+    setup_logging(args)
+    if args.dry_run:
+        args.verbose = True
+        args.oneshot = True
+    config = get_config(args, Config)
+    config.logger.debug("debug mode enabled")
+    check_init_db(config)
     poller(args, Config, poll)
 
 # vim: colorcolumn=80 expandtab sw=4 ts=4

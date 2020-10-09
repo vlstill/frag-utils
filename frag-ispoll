@@ -14,7 +14,6 @@ import typing
 
 from dataclasses import dataclass
 from datetime import datetime
-from common import fprint
 from isapi.files import FileMeta
 from typing import Optional, TypeVar, Iterable, Dict, List, Tuple
 from common import to_utc_strip
@@ -87,6 +86,10 @@ class Assignment(common.BaseAssignment):
 
 
 class Config(common.BaseConfig):
+    def __init__(self, raw: dict, args: Any) -> None:
+        super().__init__(raw, args, "is")
+        self.report_extra = raw.get("report_extra")
+
     def assignments(self, db: psycopg2.connection) -> Iterable[Assignment]:
         asgns = self._assignments()
         return (Assignment(raw, name, self, db)
@@ -135,16 +138,16 @@ def poll(args: argparse.Namespace, config: Config) -> None:
         if not asgn.enabled:
             continue
         if asgn.id is None:
-            fprint(f"Assignment {asgn.name} not in frag, skipping…",
-                   file=sys.stderr)
+            config.logger.info(f"Assignment {asgn.name} not in frag, skipping")
             continue
 
+        config.logger.debug(f"Processing {asgn.name}…")
         assert asgn.file_names is not None
         if len(asgn.file_names) != 1 and asgn.multifile is MultiFile.Disabled:
-            fprint(f"W: Assignment {asgn.name} has "
-                   f"{len(asgn.file_names)} files defined in frag,"
-                   " but it needs to have 1 (no multifile set). Skipping…",
-                   file=sys.stderr)
+            config.logger.warning(f"Assignment {asgn.name} has "
+                                  f"{len(asgn.file_names)} files defined in "
+                                  "frag, but it needs to have 1 "
+                                  "(no multifile set). Skipping…")
             continue
 
         submissions, extra = collect_submissions(isconn, db, asgn)
@@ -165,6 +168,7 @@ def collect_submissions(isconn: isapi.files.Connection,
             dirm = isconn.list_directory(ispath)
             for filem in dirm.entries:
                 if asgn.match(filem):
+                    db.logger.debug(f"found file {filem}")
                     if filem.author in submissions:
                         submissions[filem.author].add_file(db, filem)
                     else:
@@ -172,7 +176,7 @@ def collect_submissions(isconn: isapi.files.Connection,
                 else:
                     unmatched.append(filem)
         except isapi.files.FileDoesNotExistException:
-            fprint(f"W: Directory does not exist: {ispath}", file=sys.stderr)
+            db.logger.warning(f"Directory does not exist: {ispath}")
 
     return ([sub for sub in submissions.values() if sub.is_todo()], unmatched)
 
@@ -222,7 +226,7 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection,
 def process_submission(config: Config, db: psycopg2.connection,
                        isconn: isapi.files.Connection, sub: Submission) \
                        -> None:
-    fprint("processing", sub, "…")
+    config.logger.info(f"processing {sub}…")
     assert sub.asgn.id is not None
     assert sub.asgn.file_names is not None
     common.submit_assignment(sub.asgn.id, sub.person_id, db,
