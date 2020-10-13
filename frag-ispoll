@@ -146,6 +146,8 @@ class Submission:
             self.timestamp = max(self.timestamp, filem.change_time)
             self.files[name] = filem
             self.dirty = self.dirty or not file_processed(filem, db)
+        else:
+            self.superseded.append(filem)
 
     def is_todo(self) -> bool:
         if self.asgn.multifile is not MultiFile.All:
