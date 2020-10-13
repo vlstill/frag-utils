@@ -40,11 +40,28 @@ assignments:
         #
         # You cannot specify 'name template' and 'multifile' at once.
         multifile: any # or 'disabled', 'all'
-    week01_task02:
-        enabled: True
-        source: week01
+#    week01_task02:
+#        enabled: True
+#        source: week01
     week01_nonexistent:
         enabled: true
         source: week01
         name template: task_nonexistent.py
+report_extra:
+    subject: "[IV074] Neodevzdatelné soubory v odevzdávárně"
+    text: |
+        Dobrý den, {author},
+
+        při vyhodnocování odevzdávárny jsme našli soubory, které nedokážeme
+        zpracovat, protože nepatří k žádné úloze. Jsou to následující soubory:
+        {path_list}
+
+        Zkontrolujte, že jste tyto soubory nechtěl/a odevzdat jinam nebo jinak.
+
+        S pozdravem
+        frag-ispoll
+    to:
+      - "ispoll+{uid}@vstill.cz"
+    from:
+      - "ispoll-ib111@vstill.cz"
 vim: expandtab

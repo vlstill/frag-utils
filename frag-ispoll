@@ -9,13 +9,15 @@ import os
 import os.path
 import psycopg2  # type: ignore
 import re
+import smtplib
 import sys
 import typing
 
 from dataclasses import dataclass
 from datetime import datetime
+from email.message import EmailMessage
 from isapi.files import FileMeta
-from typing import Optional, TypeVar, Iterable, Dict, List, Tuple
+from typing import Optional, TypeVar, Iterable, Dict, List, Tuple, Any
 from common import to_utc_strip
 
 τ = TypeVar("τ")
@@ -153,16 +155,53 @@ def poll(args: argparse.Namespace, config: Config) -> None:
         submissions, extra = collect_submissions(isconn, db, asgn)
         for sub in submissions:
             process_submission(config, db, isconn, sub)
-        for filem in extra:
-            confirm_file(filem, db, evaluated=False)
-            db.commit()
+        for filems in extra:
+            process_extraneous(config, db, filems)
+
+
+def process_extraneous(config: Config, db: psycopg2.connection,
+                       filems: List[FileMeta]) -> None:
+    filems = [filem for filem in filems
+              if not file_processed(filem, db,
+                                    evaluated=EvaluationMode.Ignored)]
+    if len(filems) == 0:
+        return
+    config.logger.warning(f"extra files for {filems[0].author}: {filems}")
+
+    if config.report_extra:
+        paths = [f'https://is.muni.cz/auth{filem.ispath}' for filem in filems]
+        path_list = "    - " + "\n    - ".join(paths)
+
+        author_uid = filems[0].author
+        with db.cursor() as cur:
+            cur.execute("select name from person where id = %s",
+                        (author_uid,))
+            row = cur.fetchone()
+        author_name = row[0] if row else str(author_uid)
+
+        subject = config.report_extra["subject"]
+        text = config.report_extra["text"].format(path_list=path_list,
+                                                  author=author_name)
+        to = [to.format(uid=filems[0].author)
+              for to in config.report_extra["to"]]
+
+        msg = EmailMessage()
+        msg.set_content(text)
+        msg["Subject"] = subject
+        msg["From"] = config.report_extra["from"]
+        msg["To"] = ", ".join(to)
+        with smtplib.SMTP('localhost') as smtp:
+            smtp.send_message(msg)
+    for filem in filems:
+        confirm_file(filem, db, evaluated=False)
+    db.commit()
 
 
 def collect_submissions(isconn: isapi.files.Connection,
                         db: psycopg2.connection, asgn: Assignment) \
-                        -> Tuple[List[Submission], List[FileMeta]]:
+                        -> Tuple[List[Submission], List[List[FileMeta]]]:
     submissions: Dict[int, Submission] = {}
-    unmatched: List[FileMeta] = []
+    unmatched: Dict[int, List[FileMeta]] = {}
     for ispath in asgn.sources:
         try:
             dirm = isconn.list_directory(ispath)
@@ -174,11 +213,13 @@ def collect_submissions(isconn: isapi.files.Connection,
                     else:
                         submissions[filem.author] = Submission(db, asgn, filem)
                 else:
-                    unmatched.append(filem)
+                    db.logger.debug(f"found unmatched {filem}")
+                    unmatched.setdefault(filem.author, []).append(filem)
         except isapi.files.FileDoesNotExistException:
             db.logger.warning(f"Directory does not exist: {ispath}")
 
-    return ([sub for sub in submissions.values() if sub.is_todo()], unmatched)
+    return ([sub for sub in submissions.values() if sub.is_todo()],
+            list(unmatched.values()))
 
 
 def get_ispath_id(filem: FileMeta, cur: psycopg2.cursor) -> Optional[int]:
@@ -254,13 +295,13 @@ def check_init_db(config: Config) -> None:
                   change_time timestamp without time zone not null,
                   author integer,
                   evaluated boolean default true,
+                  timestamp timestamp without time zone default frag.utc_now(),
                   constraint processed_ispath_id_ispath_id_fkey
                     foreign key (ispath_id)
                       references frag_ispoll.ispath(id),
                   constraint processed_unique
                     unique (ispath_id, author, change_time, evaluated)
                 )""")
-            common.add_timestamp_to_processed(cur, "is")
             db.commit()
 
 
