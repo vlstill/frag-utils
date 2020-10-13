@@ -98,12 +98,28 @@ class Config(common.BaseConfig):
                 for name, raw in asgns.items())
 
 
+class EvaluationMode(enum.Enum):
+    Ignored = enum.auto()
+    Superseded = enum.auto()
+    Submitted = enum.auto()
+
+    @staticmethod
+    def parse(raw: str) -> MultiFile:
+        raw = raw[0].upper() + raw[1:].lower()
+        return MultiFile.__members__[raw]
+
+    def __str__(self) -> str:
+        return self.name.lower()
+
+
 @dataclass
 class Submission:
     person_id: int
     timestamp: datetime
     files: Dict[str, FileMeta]
     dirty: bool
+    asgn: Assignment
+    superseded: List[FileMeta]
 
     def __init__(self, db: psycopg2.connection, asgn: Assignment,
                  first_file: FileMeta) -> None:
@@ -114,13 +130,19 @@ class Submission:
         self.files = {name: first_file}
         self.dirty = not file_processed(first_file, db)
         self.asgn = asgn
+        self.superseded = []
 
     def add_file(self, db: psycopg2.connection, filem: FileMeta) -> None:
         assert self.person_id == filem.author
         name = self.asgn.canonic_file_name(filem)
         assert name is not None
-        if name not in self.files \
-                or self.files[name].change_time < filem.change_time:
+
+        new_name = name not in self.files
+        new_version = not new_name and \
+            self.files[name].change_time < filem.change_time
+        if new_name or new_version:
+            if new_version:
+                self.superseded.append(self.files[name])
             self.timestamp = max(self.timestamp, filem.change_time)
             self.files[name] = filem
             self.dirty = self.dirty or not file_processed(filem, db)
@@ -193,7 +215,7 @@ def process_extraneous(config: Config, db: psycopg2.connection,
         with smtplib.SMTP('localhost') as smtp:
             smtp.send_message(msg)
     for filem in filems:
-        confirm_file(filem, db, evaluated=False)
+        confirm_file(filem, db, evaluated=EvaluationMode.Ignored)
     db.commit()
 
 
@@ -231,7 +253,9 @@ def get_ispath_id(filem: FileMeta, cur: psycopg2.cursor) -> Optional[int]:
     return typing.cast(int, cur.fetchone()[0])
 
 
-def file_processed(filem: FileMeta, db: psycopg2.connection) -> bool:
+def file_processed(filem: FileMeta, db: psycopg2.connection,
+                   evaluated: EvaluationMode = EvaluationMode.Superseded) \
+                   -> bool:
     with db.cursor() as cur:
         ispath_id = get_ispath_id(filem, cur)
         if ispath_id is None:
@@ -240,13 +264,14 @@ def file_processed(filem: FileMeta, db: psycopg2.connection) -> bool:
                     "  where ispath_id = %s"
                     "    and author = %s"
                     "    and change_time = %s"
-                    "    and evaluated = true",
-                    (ispath_id, filem.author, to_utc_strip(filem.change_time)))
+                    "    and evaluated >= %s :: evaluation_mode",
+                    (ispath_id, filem.author, to_utc_strip(filem.change_time),
+                     str(evaluated)))
         return bool(cur.fetchone()[0])
 
 
 def confirm_file(filem: FileMeta, db: psycopg2.connection,
-                 evaluated: bool = True) -> None:
+                 evaluated: EvaluationMode = EvaluationMode.Submitted) -> None:
     with db.cursor() as cur:
         cur.execute("insert into frag_ispoll.ispath (path)"
                     " values (%s)"
@@ -258,10 +283,10 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection,
         assert ispath_id > 0
         cur.execute("insert into frag_ispoll.processed"
                     " (ispath_id, author, change_time, evaluated)"
-                    " values (%s, %s, %s, %s)"
+                    " values (%s, %s, %s, %s :: evaluation_mode)"
                     " on conflict do nothing",
                     (ispath_id, filem.author, to_utc_strip(filem.change_time),
-                     evaluated))
+                     str(evaluated)))
 
 
 def process_submission(config: Config, db: psycopg2.connection,
@@ -278,6 +303,9 @@ def process_submission(config: Config, db: psycopg2.connection,
 
     for filem in sub.files.values():
         confirm_file(filem, db)
+    # confirm also files superseded/shadowed by the submitted one
+    for filem in sub.superseded:
+        confirm_file(filem, db, evaluated=EvaluationMode.Superseded)
     db.commit()
 
 
@@ -285,6 +313,16 @@ def check_init_db(config: Config) -> None:
     with config.connect_db() as db:
         common.create_schema_if_not_exists("frag_ispoll", db)
         with db.cursor() as cur:
+            cur.execute("select count(*) from pg_catalog.pg_type"
+                        "  where typname = 'evaluation_mode'")
+            evaluation_mode_defined = bool(cur.fetchone()[0])
+            if not evaluation_mode_defined:
+                cur.execute("create type evaluation_mode as enum "
+                            "  (%s, %s, %s)",
+                            (str(EvaluationMode.Ignored),
+                             str(EvaluationMode.Superseded),
+                             str(EvaluationMode.Submitted)))
+
             cur.execute("create table if not exists frag_ispoll.ispath ("
                         "  id serial primary key,"
                         "  path bytea not null unique"
@@ -294,7 +332,7 @@ def check_init_db(config: Config) -> None:
                   ispath_id integer not null,
                   change_time timestamp without time zone not null,
                   author integer,
-                  evaluated boolean default true,
+                  evaluated evaluation_mode,
                   timestamp timestamp without time zone default frag.utc_now(),
                   constraint processed_ispath_id_ispath_id_fkey
                     foreign key (ispath_id)
