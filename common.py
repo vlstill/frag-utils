@@ -247,16 +247,13 @@ class BaseConfig:
         self.logger.debug("commit skipped")
 
     def connect_db(self) -> psycopg2.connection:
-        confa = None
-        if self.verbose:
-            confa = LoggingConnection
         db = psycopg2.connect(dbname=self.course(), host=self.frag_db(),
-                              user=self.frag_user(), connection_factory=confa)
-        if self.verbose:
-            db.initialize(self.logger)
+                              user=self.frag_user(),
+                              connection_factory=LoggingConnection)
+        db.initialize(self.logger)
+        db.logger = self.logger
         with db.cursor() as cur:
             cur.execute("set search_path to frag")
-        db.logger = self.logger
         if self.dry_run:
             self.logger.debug("Monkey-pathing connection to disable commits")
             db.commit = lambda: self._fake_commit()
