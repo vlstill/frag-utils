@@ -266,7 +266,7 @@ def file_processed(filem: FileMeta, db: psycopg2.connection,
                     "  where ispath_id = %s"
                     "    and author = %s"
                     "    and change_time = %s"
-                    "    and evaluated >= %s :: evaluation_mode",
+                    "    and evaluated >= %s :: frag_ispoll.evaluation_mode",
                     (ispath_id, filem.author, to_utc_strip(filem.change_time),
                      str(evaluated)))
         return bool(cur.fetchone()[0])
@@ -285,7 +285,7 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection,
         assert ispath_id > 0
         cur.execute("insert into frag_ispoll.processed"
                     " (ispath_id, author, change_time, evaluated)"
-                    " values (%s, %s, %s, %s :: evaluation_mode)"
+                    " values (%s, %s, %s, %s :: frag_ispoll.evaluation_mode)"
                     " on conflict do nothing",
                     (ispath_id, filem.author, to_utc_strip(filem.change_time),
                      str(evaluated)))
@@ -319,7 +319,7 @@ def check_init_db(config: Config) -> None:
                         "  where typname = 'evaluation_mode'")
             evaluation_mode_defined = bool(cur.fetchone()[0])
             if not evaluation_mode_defined:
-                cur.execute("create type evaluation_mode as enum "
+                cur.execute("create type frag_ispoll.evaluation_mode as enum "
                             "  (%s, %s, %s)",
                             (str(EvaluationMode.Ignored),
                              str(EvaluationMode.Superseded),
@@ -334,7 +334,7 @@ def check_init_db(config: Config) -> None:
                   ispath_id integer not null,
                   change_time timestamp without time zone not null,
                   author integer,
-                  evaluated evaluation_mode,
+                  evaluated frag_ispoll.evaluation_mode,
                   timestamp timestamp without time zone default frag.utc_now(),
                   constraint processed_ispath_id_ispath_id_fkey
                     foreign key (ispath_id)
