@@ -10,7 +10,6 @@ import os.path
 import psycopg2  # type: ignore
 import re
 import smtplib
-import sys
 import typing
 
 from dataclasses import dataclass

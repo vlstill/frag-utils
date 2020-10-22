@@ -7,7 +7,6 @@ import gitlab    # type: ignore
 import posixpath
 import psycopg2  # type: ignore
 import re
-import sys
 
 from datetime import datetime
 from dateutil.parser import parse as parse_date
