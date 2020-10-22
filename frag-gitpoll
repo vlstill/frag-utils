@@ -78,6 +78,7 @@ def init_db(config: Config) -> None:
                         ")")
             common.add_timestamp_to_processed(cur, "git")
             db.commit()
+    db.close()
 
 
 def get_gitlab(name: str) -> Gitlab:
@@ -101,6 +102,7 @@ def poll(args: argparse.Namespace, config: Config) -> None:
                 materialise(config, asgn, gl, db)
             for author, path in asgn.paths.items():
                 process_path(asgn, author, path, gl, db)
+    db.close()
 
 
 def materialise(config: Config, asgn: Assignment, gl: Gitlab,
