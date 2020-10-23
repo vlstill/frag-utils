@@ -180,6 +180,7 @@ def poll(args: argparse.Namespace, config: Config) -> None:
             process_submission(config, db, isconn, sub)
         for filems in extra:
             process_extraneous(config, db, filems)
+    db.close()
 
 
 def process_extraneous(config: Config, db: psycopg2.connection,
@@ -342,6 +343,7 @@ def check_init_db(config: Config) -> None:
                     unique (ispath_id, author, change_time, evaluated)
                 )""")
             db.commit()
+    db.close()
 
 
 if __name__ == "__main__":
