@@ -246,7 +246,7 @@ class BaseConfig:
     def _fake_commit(self) -> None:
         self.logger.debug("commit skipped")
 
-    def connect_db(self) -> psycopg2.connection:
+    def _connect_db(self) -> psycopg2.connection:
         db = psycopg2.connect(dbname=self.course(), host=self.frag_db(),
                               user=self.frag_user(),
                               connection_factory=LoggingConnection)
@@ -342,8 +342,11 @@ def add_timestamp_to_processed(cur: psycopg2.cursor, poller: str) -> None:
                 "  alter column timestamp set default frag.utc_now()")
 
 
+PollType = Callable[[argparse.Namespace, τ_config, Any], None]
+
+
 def poller(args: argparse.Namespace, Config: Type[τ_config],
-           poll: Callable[[argparse.Namespace, τ_config], None]) -> None:
+           poll: PollType, db: psycopg2.connection) -> None:
     stop_signal = False
     config = get_config(args, Config)
 
@@ -358,7 +361,7 @@ def poller(args: argparse.Namespace, Config: Type[τ_config],
         config = get_config(args, Config)
         interval = config.interval()
         start = time.perf_counter()
-        poll(args, config)
+        poll(args, config, db)
         sleep_for = int((max(0, interval - (time.perf_counter() - start))))
         for _ in range(sleep_for):
             if stop_signal or args.oneshot:
@@ -383,19 +386,24 @@ def setup_logging(args: argparse.Namespace) -> None:
     root.addHandler(handler)
 
 
+CheckInitDBType = Callable[[τ_config, Any], None]
+
+
 def main(cmdparser: Callable[[], argparse.ArgumentParser],
          Config: Type[τ_config],
-         check_init_db: Callable[[τ_config], None],
-         poll: Callable[[argparse.Namespace, τ_config], None]) -> None:
+         check_init_db: CheckInitDBType,
+         poll: PollType) -> None:
     parser = cmdparser()
     args = parser.parse_args()
     setup_logging(args)
     if args.dry_run:
         args.verbose = True
         args.oneshot = True
+
     config = get_config(args, Config)
     config.logger.debug("debug mode enabled")
-    check_init_db(config)
-    poller(args, Config, poll)
+    db = config._connect_db()
+    check_init_db(config, db)
+    poller(args, Config, poll, db)
 
 # vim: colorcolumn=80 expandtab sw=4 ts=4

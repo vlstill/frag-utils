@@ -1,3 +1,5 @@
+# note: database connection parameters are NOT reloaded on every passing of the
+# interval, the rest of the values are
 frag db: frag-db.fi.muni.cz
 # frag user: xstill # optional, defaults to current unix user
 course: pv264

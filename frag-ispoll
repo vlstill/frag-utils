@@ -155,9 +155,8 @@ class Submission:
         return self.dirty and len(self.files) == len(self.asgn.file_names)
 
 
-def poll(args: argparse.Namespace, config: Config) -> None:
-    db = config.connect_db()
-
+def poll(args: argparse.Namespace, config: Config, db: psycopg2.connection) \
+        -> None:
     isconn = isapi.files.Connection()
     for asgn in config.assignments(db):
         if not asgn.enabled:
@@ -180,7 +179,6 @@ def poll(args: argparse.Namespace, config: Config) -> None:
             process_submission(config, db, isconn, sub)
         for filems in extra:
             process_extraneous(config, db, filems)
-    db.close()
 
 
 def process_extraneous(config: Config, db: psycopg2.connection,
@@ -311,39 +309,37 @@ def process_submission(config: Config, db: psycopg2.connection,
     db.commit()
 
 
-def check_init_db(config: Config) -> None:
-    with config.connect_db() as db:
-        common.create_schema_if_not_exists("frag_ispoll", db)
-        with db.cursor() as cur:
-            cur.execute("select count(*) from pg_catalog.pg_type"
-                        "  where typname = 'evaluation_mode'")
-            evaluation_mode_defined = bool(cur.fetchone()[0])
-            if not evaluation_mode_defined:
-                cur.execute("create type frag_ispoll.evaluation_mode as enum "
-                            "  (%s, %s, %s)",
-                            (str(EvaluationMode.Ignored),
-                             str(EvaluationMode.Superseded),
-                             str(EvaluationMode.Submitted)))
+def check_init_db(config: Config, db: psycopg2.connection) -> None:
+    common.create_schema_if_not_exists("frag_ispoll", db)
+    with db.cursor() as cur:
+        cur.execute("select count(*) from pg_catalog.pg_type"
+                    "  where typname = 'evaluation_mode'")
+        evaluation_mode_defined = bool(cur.fetchone()[0])
+        if not evaluation_mode_defined:
+            cur.execute("create type frag_ispoll.evaluation_mode as enum "
+                        "  (%s, %s, %s)",
+                        (str(EvaluationMode.Ignored),
+                         str(EvaluationMode.Superseded),
+                         str(EvaluationMode.Submitted)))
 
-            cur.execute("create table if not exists frag_ispoll.ispath ("
-                        "  id serial primary key,"
-                        "  path bytea not null unique"
-                        ")")
-            cur.execute("""
-                create table if not exists frag_ispoll.processed (
-                  ispath_id integer not null,
-                  change_time timestamp without time zone not null,
-                  author integer,
-                  evaluated frag_ispoll.evaluation_mode,
-                  timestamp timestamp without time zone default frag.utc_now(),
-                  constraint processed_ispath_id_ispath_id_fkey
-                    foreign key (ispath_id)
-                      references frag_ispoll.ispath(id),
-                  constraint processed_unique
-                    unique (ispath_id, author, change_time, evaluated)
-                )""")
-            db.commit()
-    db.close()
+        cur.execute("create table if not exists frag_ispoll.ispath ("
+                    "  id serial primary key,"
+                    "  path bytea not null unique"
+                    ")")
+        cur.execute("""
+            create table if not exists frag_ispoll.processed (
+              ispath_id integer not null,
+              change_time timestamp without time zone not null,
+              author integer,
+              evaluated frag_ispoll.evaluation_mode,
+              timestamp timestamp without time zone default frag.utc_now(),
+              constraint processed_ispath_id_ispath_id_fkey
+                foreign key (ispath_id)
+                  references frag_ispoll.ispath(id),
+              constraint processed_unique
+                unique (ispath_id, author, change_time, evaluated)
+            )""")
+        db.commit()
 
 
 if __name__ == "__main__":

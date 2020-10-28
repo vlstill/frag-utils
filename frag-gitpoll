@@ -57,27 +57,25 @@ class Config(common.BaseConfig):
                 for name, raw in self._assignments().items())
 
 
-def init_db(config: Config) -> None:
-    with config.connect_db() as db:
-        common.create_schema_if_not_exists("frag_gitpoll", db)
-        with db.cursor() as cur:
-            cur.execute("create table if not exists frag_gitpoll.path ("
-                        "  id serial primary key,"
-                        "  path bytea not null unique"
-                        ")")
-            cur.execute("create table if not exists frag_gitpoll.processed ("
-                        "  path_id integer not null,"
-                        "  commit_time timestamp without time zone not null,"
-                        "  commit_id text,"
-                        "  constraint processed_path_id_path_id_fkey"
-                        "    foreign key (path_id)"
-                        "      references frag_gitpoll.path(id),"
-                        "  constraint processed_unique"
-                        "    unique (path_id, commit_time, commit_id)"
-                        ")")
-            common.add_timestamp_to_processed(cur, "git")
-            db.commit()
-    db.close()
+def init_db(config: Config, db: psycopg2.connection) -> None:
+    common.create_schema_if_not_exists("frag_gitpoll", db)
+    with db.cursor() as cur:
+        cur.execute("create table if not exists frag_gitpoll.path ("
+                    "  id serial primary key,"
+                    "  path bytea not null unique"
+                    ")")
+        cur.execute("create table if not exists frag_gitpoll.processed ("
+                    "  path_id integer not null,"
+                    "  commit_time timestamp without time zone not null,"
+                    "  commit_id text,"
+                    "  constraint processed_path_id_path_id_fkey"
+                    "    foreign key (path_id)"
+                    "      references frag_gitpoll.path(id),"
+                    "  constraint processed_unique"
+                    "    unique (path_id, commit_time, commit_id)"
+                    ")")
+        common.add_timestamp_to_processed(cur, "git")
+        db.commit()
 
 
 def get_gitlab(name: str) -> Gitlab:
@@ -86,22 +84,21 @@ def get_gitlab(name: str) -> Gitlab:
         return Gitlab(f"https://{name}", private_token=auth)
 
 
-def poll(args: argparse.Namespace, config: Config) -> None:
-    with config.connect_db() as db:
-        for asgn in config.assignments(db):
-            if not asgn.enabled:
-                continue
-            if asgn.id is None:
-                config.logger.info(f"Assignment {asgn.name} not in frag, "
-                                   "skipping…")
-                continue
-            config.logger.debug(asgn)
-            gl = get_gitlab(asgn.gitlab)
-            if asgn.materialise:
-                materialise(config, asgn, gl, db)
-            for author, path in asgn.paths.items():
-                process_path(asgn, author, path, gl, db)
-    db.close()
+def poll(args: argparse.Namespace, config: Config, db: psycopg2.connection) \
+        -> None:
+    for asgn in config.assignments(db):
+        if not asgn.enabled:
+            continue
+        if asgn.id is None:
+            config.logger.info(f"Assignment {asgn.name} not in frag, "
+                               "skipping…")
+            continue
+        config.logger.debug(asgn)
+        gl = get_gitlab(asgn.gitlab)
+        if asgn.materialise:
+            materialise(config, asgn, gl, db)
+        for author, path in asgn.paths.items():
+            process_path(asgn, author, path, gl, db)
 
 
 def materialise(config: Config, asgn: Assignment, gl: Gitlab,
