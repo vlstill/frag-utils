@@ -42,7 +42,7 @@ class Assignment(common.BaseAssignment):
     RE_ANY = re.compile(".*")
 
     def __init__(self, raw: dict, name: str, config: Config,
-                 db: psycopg2.connection) -> None:
+                 db: common.DBConnection) -> None:
         super().__init__(raw, name, config, db)
         assert "source" in self.raw
         source = self.raw['source']
@@ -91,7 +91,7 @@ class Config(common.BaseConfig):
         super().__init__(raw, args, "is")
         self.report_extra = raw.get("report_extra")
 
-    def assignments(self, db: psycopg2.connection) -> Iterable[Assignment]:
+    def assignments(self, db: common.DBConnection) -> Iterable[Assignment]:
         asgns = self._assignments()
         return (Assignment(raw, name, self, db)
                 for name, raw in asgns.items())
@@ -120,7 +120,7 @@ class Submission:
     asgn: Assignment
     superseded: List[FileMeta]
 
-    def __init__(self, db: psycopg2.connection, asgn: Assignment,
+    def __init__(self, db: common.DBConnection, asgn: Assignment,
                  first_file: FileMeta) -> None:
         self.person_id = first_file.author
         self.timestamp = first_file.change_time
@@ -131,7 +131,7 @@ class Submission:
         self.asgn = asgn
         self.superseded = []
 
-    def add_file(self, db: psycopg2.connection, filem: FileMeta) -> None:
+    def add_file(self, db: common.DBConnection, filem: FileMeta) -> None:
         assert self.person_id == filem.author
         name = self.asgn.canonic_file_name(filem)
         assert name is not None
@@ -155,7 +155,7 @@ class Submission:
         return self.dirty and len(self.files) == len(self.asgn.file_names)
 
 
-def poll(args: argparse.Namespace, config: Config, db: psycopg2.connection) \
+def poll(args: argparse.Namespace, config: Config, db: common.DBConnection) \
         -> None:
     isconn = isapi.files.Connection()
     for asgn in config.assignments(db):
@@ -181,7 +181,7 @@ def poll(args: argparse.Namespace, config: Config, db: psycopg2.connection) \
             process_extraneous(config, db, filems)
 
 
-def process_extraneous(config: Config, db: psycopg2.connection,
+def process_extraneous(config: Config, db: common.DBConnection,
                        filems: List[FileMeta]) -> None:
     filems = [filem for filem in filems
               if not file_processed(filem, db,
@@ -220,7 +220,7 @@ def process_extraneous(config: Config, db: psycopg2.connection,
 
 
 def collect_submissions(isconn: isapi.files.Connection,
-                        db: psycopg2.connection, asgn: Assignment) \
+                        db: common.DBConnection, asgn: Assignment) \
                         -> Tuple[List[Submission], List[List[FileMeta]]]:
     submissions: Dict[int, Submission] = {}
     unmatched: Dict[int, List[FileMeta]] = {}
@@ -253,7 +253,7 @@ def get_ispath_id(filem: FileMeta, cur: psycopg2.cursor) -> Optional[int]:
     return typing.cast(int, cur.fetchone()[0])
 
 
-def file_processed(filem: FileMeta, db: psycopg2.connection,
+def file_processed(filem: FileMeta, db: common.DBConnection,
                    evaluated: EvaluationMode = EvaluationMode.Superseded) \
                    -> bool:
     with db.cursor() as cur:
@@ -270,7 +270,7 @@ def file_processed(filem: FileMeta, db: psycopg2.connection,
         return bool(cur.fetchone()[0])
 
 
-def confirm_file(filem: FileMeta, db: psycopg2.connection,
+def confirm_file(filem: FileMeta, db: common.DBConnection,
                  evaluated: EvaluationMode = EvaluationMode.Submitted) -> None:
     with db.cursor() as cur:
         cur.execute("insert into frag_ispoll.ispath (path)"
@@ -289,7 +289,7 @@ def confirm_file(filem: FileMeta, db: psycopg2.connection,
                      str(evaluated)))
 
 
-def process_submission(config: Config, db: psycopg2.connection,
+def process_submission(config: Config, db: common.DBConnection,
                        isconn: isapi.files.Connection, sub: Submission) \
                        -> None:
     config.logger.info(f"processing {sub}…")
@@ -309,7 +309,7 @@ def process_submission(config: Config, db: psycopg2.connection,
     db.commit()
 
 
-def check_init_db(config: Config, db: psycopg2.connection) -> None:
+def check_init_db(config: Config, db: common.DBConnection) -> None:
     common.create_schema_if_not_exists("frag_ispoll", db)
     with db.cursor() as cur:
         cur.execute("select count(*) from pg_catalog.pg_type"

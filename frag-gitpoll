@@ -5,7 +5,6 @@ import argparse
 import common
 import gitlab    # type: ignore
 import posixpath
-import psycopg2  # type: ignore
 import re
 
 from datetime import datetime
@@ -28,7 +27,7 @@ class Assignment(common.BaseAssignment):
     VAR_STUDENT_ID = "{student_id}"        # noqa: FS003
 
     def __init__(self, raw: dict, name: str, config: Config,
-                 db: psycopg2.connection) -> None:
+                 db: common.DBConnection) -> None:
         super().__init__(raw, name, config, db)
         assert "source" in self.raw
         host, path = self.raw["source"].split(':', 1)
@@ -52,12 +51,12 @@ class Config(common.BaseConfig):
     def __init__(self, raw: dict, args: Any) -> None:
         super().__init__(raw, args, "git")
 
-    def assignments(self, db: psycopg2.connection) -> Iterable[Assignment]:
+    def assignments(self, db: common.DBConnection) -> Iterable[Assignment]:
         return (Assignment(raw, name, self, db)
                 for name, raw in self._assignments().items())
 
 
-def init_db(config: Config, db: psycopg2.connection) -> None:
+def init_db(config: Config, db: common.DBConnection) -> None:
     common.create_schema_if_not_exists("frag_gitpoll", db)
     with db.cursor() as cur:
         cur.execute("create table if not exists frag_gitpoll.path ("
@@ -84,7 +83,7 @@ def get_gitlab(name: str) -> Gitlab:
         return Gitlab(f"https://{name}", private_token=auth)
 
 
-def poll(args: argparse.Namespace, config: Config, db: psycopg2.connection) \
+def poll(args: argparse.Namespace, config: Config, db: common.DBConnection) \
         -> None:
     for asgn in config.assignments(db):
         if not asgn.enabled:
@@ -102,7 +101,7 @@ def poll(args: argparse.Namespace, config: Config, db: psycopg2.connection) \
 
 
 def materialise(config: Config, asgn: Assignment, gl: Gitlab,
-                db: psycopg2.connection) -> None:
+                db: common.DBConnection) -> None:
     if (Assignment.VAR_STUDENT_LOGIN in asgn.raw_path
             and Assignment.VAR_STUDENT_ID is asgn.raw_path) \
         or (Assignment.VAR_STUDENT_LOGIN not in asgn.raw_path
@@ -206,7 +205,7 @@ def get_repo(gl: Gitlab, path: str) \
 
 
 def commit_processed(path: str, commit: str, time: datetime,
-                     db: psycopg2.connection) -> bool:
+                     db: common.DBConnection) -> bool:
     with db.cursor() as cur:
         cur.execute("select count(*) from frag_gitpoll.processed"
                     "  join frag_gitpoll.path on (path.id = processed.path_id)"
@@ -217,7 +216,7 @@ def commit_processed(path: str, commit: str, time: datetime,
 
 
 def commit_confirm(path: str, commit: str, time: datetime,
-                   db: psycopg2.connection) -> None:
+                   db: common.DBConnection) -> None:
     with db.cursor() as cur:
         cur.execute("""
             insert into frag_gitpoll.path (path) values (%s)
@@ -239,7 +238,7 @@ def commit_confirm(path: str, commit: str, time: datetime,
 
 def commit_submit(asgn: Assignment, author: int, repo: gitlab.Project,
                   commit: str, time: datetime,
-                  db: psycopg2.connection) -> None:
+                  db: common.DBConnection) -> None:
     files: List[common.File] = []
 
     # NOTE: not recursive
@@ -262,7 +261,7 @@ def commit_submit(asgn: Assignment, author: int, repo: gitlab.Project,
 
 
 def process_path(asgn: Assignment, author: int, path: str, gl: Gitlab,
-                 db: psycopg2.connection) -> None:
+                 db: common.DBConnection) -> None:
     repo = get_repo(gl, path)
     if repo is None:
         db.logger.warning(f"skipping nonexistent {path}")

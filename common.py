@@ -66,7 +66,7 @@ class EvalReq(Enum):
     TeacherInactiveOnly = auto()
 
 
-def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
+def submit_assignment(asgn_id: int, author: int, db: DBConnection,
                       files: List[File],
                       timestamp: Optional[datetime] = None,
                       eval_req: EvalReq = EvalReq.TeacherInactiveOnly) -> None:
@@ -119,7 +119,7 @@ def submit_assignment(asgn_id: int, author: int, db: psycopg2.connection,
 
 
 def request_evaluation(asgn_id: int, submission_id: int,
-                       db: psycopg2.connection) -> None:
+                       db: DBConnection) -> None:
     with db.cursor() as cur:
         cur.execute("""
             select id from current_suite
@@ -166,7 +166,7 @@ def cmdparser(description: str) -> argparse.ArgumentParser:
 
 class BaseAssignment:
     def __init__(self, raw: dict, name: str, config: BaseConfig,
-                 db: Optional[psycopg2.connection] = None) -> None:
+                 db: Optional[DBConnection] = None) -> None:
         self.name = name
         self.raw = raw
         self.enabled = self._enabled()
@@ -198,6 +198,23 @@ class BaseAssignment:
         if extra is not None:
             out += " " + extra
         return out + "]"
+
+
+class DBConnection(LoggingConnection):
+    def __init__(self, *args: Any, **kvargs: Any) -> None:
+        super().__init__(*args, **kvargs)
+        self.dry_run = False
+
+    def initialize(self, logger: logging.Logger) -> None:
+        super().initialize(logger)
+        self.logger = logger
+
+    def commit(self) -> None:
+        if self.dry_run:
+            self.logger.debug("commit skipped")
+        else:
+            self.logger.debug("commit")
+            super().commit()
 
 
 class BaseConfig:
@@ -243,27 +260,21 @@ class BaseConfig:
             return BaseConfig._check(self.raw["frag user"], str)
         return getpass.getuser()
 
-    def _fake_commit(self) -> None:
-        self.logger.debug("commit skipped")
-
-    def _connect_db(self) -> psycopg2.connection:
+    def _connect_db(self) -> DBConnection:
         db = psycopg2.connect(dbname=self.course(), host=self.frag_db(),
                               user=self.frag_user(),
-                              connection_factory=LoggingConnection)
+                              connection_factory=DBConnection)
         db.initialize(self.logger)
-        db.logger = self.logger
         with db.cursor() as cur:
             cur.execute("set search_path to frag")
-        if self.dry_run:
-            self.logger.debug("Monkey-pathing connection to disable commits")
-            db.commit = lambda: self._fake_commit()
-        return db
+        db.dry_run = self.dry_run
+        return db  # type: ignore
 
 
 τ_config = TypeVar("τ_config", bound=BaseConfig)
 
 
-def get_asgn_id(name: str, db: psycopg2.connection) -> Optional[int]:
+def get_asgn_id(name: str, db: DBConnection) -> Optional[int]:
     with db.cursor() as cur:
         cur.execute("select id from assignment where name = %s",
                     (name,))
@@ -274,7 +285,7 @@ def get_asgn_id(name: str, db: psycopg2.connection) -> Optional[int]:
         return rec[0]
 
 
-def get_asgn_files(asgn_id: int, db: psycopg2.connection) -> List[str]:
+def get_asgn_files(asgn_id: int, db: DBConnection) -> List[str]:
     with db.cursor() as cur:
         cur.execute("select name from assignment_in where assignment_id = %s",
                     (asgn_id,))
@@ -289,7 +300,7 @@ class Person:
     is_teacher: bool
 
 
-def _get_people(table: str, is_teacher: bool, db: psycopg2.connection) \
+def _get_people(table: str, is_teacher: bool, db: DBConnection) \
         -> Iterable[Person]:
     with db.cursor() as cur:
         cur.execute(f"select id, login, name from {table}")
@@ -297,21 +308,21 @@ def _get_people(table: str, is_teacher: bool, db: psycopg2.connection) \
                 for uid, login, name in cur.fetchall())
 
 
-def get_teachers(db: psycopg2.connection) -> Iterable[Person]:
+def get_teachers(db: DBConnection) -> Iterable[Person]:
     return _get_people("teacher_list join person"
                        "  on (teacher_list.teacher = person.id)", True, db)
 
 
-def get_students(db: psycopg2.connection) -> Iterable[Person]:
+def get_students(db: DBConnection) -> Iterable[Person]:
     return _get_people("enrollment join person "
                        "  on (enrollment.student = person.id)", False, db)
 
 
-def get_people(db: psycopg2.connection) -> Iterable[Person]:
+def get_people(db: DBConnection) -> Iterable[Person]:
     return itertools.chain(get_teachers(db), get_students(db))
 
 
-def create_schema_if_not_exists(name: str, db: psycopg2.connection) -> None:
+def create_schema_if_not_exists(name: str, db: DBConnection) -> None:
     """Creates a schema if it does not exist, but in a way that does not
     violate permissions if the schema already exists
     (unlike CREATE SCHEMA IF NOT EXISTS command)."""
@@ -342,11 +353,11 @@ def add_timestamp_to_processed(cur: psycopg2.cursor, poller: str) -> None:
                 "  alter column timestamp set default frag.utc_now()")
 
 
-PollType = Callable[[argparse.Namespace, τ_config, Any], None]
+PollType = Callable[[argparse.Namespace, τ_config, DBConnection], None]
 
 
 def poller(args: argparse.Namespace, Config: Type[τ_config],
-           poll: PollType, db: psycopg2.connection) -> None:
+           poll: PollType, db: DBConnection) -> None:
     stop_signal = False
     config = get_config(args, Config)
 
@@ -386,7 +397,7 @@ def setup_logging(args: argparse.Namespace) -> None:
     root.addHandler(handler)
 
 
-CheckInitDBType = Callable[[τ_config, Any], None]
+CheckInitDBType = Callable[[τ_config, DBConnection], None]
 
 
 def main(cmdparser: Callable[[], argparse.ArgumentParser],
