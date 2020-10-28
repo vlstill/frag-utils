@@ -71,33 +71,20 @@ def submit_assignment(asgn_id: int, author: int, db: DBConnection,
                       timestamp: Optional[datetime] = None,
                       eval_req: EvalReq = EvalReq.TeacherInactiveOnly) -> None:
     with db.cursor() as cur:
-        sid: Optional[int] = None
         if timestamp is not None:
             utc_stamp = to_utc_strip(timestamp)
-            # TODO: retrying should not be needed, what causes the duplicites?
-            for retry in range(10):
-                cur.execute("""
-                    insert into submission (author, assignment_id, stamp)
-                      values (%s, %s, %s)
-                      on conflict do nothing
-                      returning (id)
-                      """, (author, asgn_id, utc_stamp))
-                utc_stamp = utc_stamp.replace(microsecond=retry + 1)
-                sid_row = cur.fetchone()
-                if sid_row is not None:
-                    sid = sid_row[0]
-                    break
-                else:
-                    db.logger.warning(f"Retrying {asgn_id} for {author}, "
-                                      f"{timestamp} → {utc_stamp}")
+            cur.execute("""
+                insert into submission (author, assignment_id, stamp)
+                  values (%s, %s, %s)
+                  returning (id)
+                  """, (author, asgn_id, utc_stamp))
         else:
             cur.execute("""
                 insert into submission (author, assignment_id)
                   values (%s, %s)
                   returning (id)
                   """, (author, asgn_id))
-            sid = cur.fetchone()[0]
-        assert sid
+        sid = cur.fetchone()[0]
 
         for f in files:
             file_sha = sha256(f.data)
