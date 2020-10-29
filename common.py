@@ -338,7 +338,7 @@ def add_timestamp_to_processed(cur: psycopg2.cursor, poller: str) -> None:
                 "  add column if not exists timestamp"
                 "    timestamp without time zone")
     cur.execute(f"alter table frag_{poller}poll.processed"
-                "  alter column timestamp set default frag.utc_now()")
+                "  alter column timestamp set default frag.utc_now_st()")
 
 
 PollType = Callable[[argparse.Namespace, τ_config, DBConnection], None]

@@ -332,13 +332,14 @@ def check_init_db(config: Config, db: common.DBConnection) -> None:
               change_time timestamp without time zone not null,
               author integer,
               evaluated frag_ispoll.evaluation_mode,
-              timestamp timestamp without time zone default frag.utc_now(),
+              timestamp timestamp without time zone default frag.utc_now_st(),
               constraint processed_ispath_id_ispath_id_fkey
                 foreign key (ispath_id)
                   references frag_ispoll.ispath(id),
               constraint processed_unique
                 unique (ispath_id, author, change_time, evaluated)
             )""")
+        common.add_timestamp_to_processed(cur, "is")
         db.commit()
 
 
