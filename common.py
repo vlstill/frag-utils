@@ -212,7 +212,8 @@ class BaseConfig:
         self.dry_run = cmdargs.dry_run
         self.logger = logging.getLogger(f"frag-{typ}poll")
         if self.verbose:
-            self.logger.setLevel(logging.DEBUG)
+            # set for the root logger
+            logging.getLogger().setLevel(logging.DEBUG)
 
     @staticmethod
     def _check(val: Any, typ: Type[τ]) -> τ:
