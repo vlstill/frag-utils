@@ -244,7 +244,11 @@ def commit_submit(asgn: Assignment, author: int, repo: gitlab.Project,
     # NOTE: not recursive
     repo_files: Dict[str, str] = {}
     for entry in repo.repository_tree(ref=commit, as_list=False):
-        assert entry["type"] == 'blob'
+        typ = entry["type"]
+        db.logger.debug(f"Gitlab: found file {entry['path']} of type {typ}")
+        if typ == "tree":  # directory
+            continue
+        assert typ == 'blob'
         repo_files[entry["path"]] = entry["id"]
 
     assert asgn.id is not None
