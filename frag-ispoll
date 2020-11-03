@@ -289,17 +289,29 @@ def confirm_file(filem: FileMeta, db: common.DBConnection,
                      str(evaluated)))
 
 
+def get_files(isconn: isapi.files.Connection,
+              files: Iterable[Tuple[str, FileMeta]]) -> List[common.File]:
+    out: List[common.File] = []
+    for name, filem in files:
+        try:
+            out.append(common.File(name, data=isconn.get_file(filem).data))
+        except isapi.files.FileDoesNotExistException:
+            isconn.logger.warning(f"File vanished: {filem}")
+    return out
+
+
 def process_submission(config: Config, db: common.DBConnection,
                        isconn: isapi.files.Connection, sub: Submission) \
                        -> None:
     config.logger.info(f"processing {sub}…")
     assert sub.asgn.id is not None
     assert sub.asgn.file_names is not None
-    common.submit_assignment(sub.asgn.id, sub.person_id, db,
-                             [common.File(name,
-                                          data=isconn.get_file(filem).data)
-                              for name, filem in sub.files.items()],
-                             sub.timestamp)
+    files = get_files(isconn, sub.files.items())
+    if files:
+        common.submit_assignment(sub.asgn.id, sub.person_id, db,
+                                 files, sub.timestamp)
+    else:
+        db.logger.warning("All files vanished, skipping submission")
 
     for filem in sub.files.values():
         confirm_file(filem, db)
