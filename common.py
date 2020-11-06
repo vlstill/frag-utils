@@ -358,10 +358,13 @@ def poller(args: argparse.Namespace, Config: Type[τ_config],
 
     while True:
         config = get_config(args, Config)
+        config.logger.info("starting poll")
         interval = config.interval()
         start = time.perf_counter()
         poll(args, config, db)
-        sleep_for = int((max(0, interval - (time.perf_counter() - start))))
+        poll_time = (time.perf_counter() - start)
+        config.logger.info(f"poll ended in {poll_time} seconds")
+        sleep_for = int((max(0, interval - poll_time)))
         for _ in range(sleep_for):
             if stop_signal or args.oneshot:
                 return
