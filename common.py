@@ -362,6 +362,9 @@ def poller(args: argparse.Namespace, Config: Type[τ_config],
         interval = config.interval()
         start = time.perf_counter()
         poll(args, config, db)
+        # kill any uncommited state, avoid leaving open transactions between
+        # polls
+        db.rollback()
         poll_time = (time.perf_counter() - start)
         config.logger.info(f"poll ended in {poll_time} seconds")
         sleep_for = int((max(0, interval - poll_time)))
