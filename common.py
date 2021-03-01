@@ -9,11 +9,11 @@ import psycopg2  # type: ignore
 import re
 import signal
 import sys
-import time
 import yaml
 
+from time import perf_counter, sleep
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime, date, time, timedelta
 from enum import Enum, auto
 from systemd.journal import JournalHandler  # type: ignore
 from psycopg2.extras import LoggingConnection  # type: ignore
@@ -156,7 +156,7 @@ class BaseAssignment:
                  db: Optional[DBConnection] = None) -> None:
         self.name = name
         self.raw = raw
-        self.enabled = self._enabled()
+        self.enabled = self._enabled(config.interval())
         self.id: Optional[int] = None
         self.file_names: Optional[List[str]] = None
         if db is not None:
@@ -164,16 +164,19 @@ class BaseAssignment:
             if self.id is not None:
                 self.file_names = get_asgn_files(self.id, db)
 
-    def _enabled(self) -> bool:
+    def _enabled(self, interval: int) -> bool:
         en = self.raw.get("enabled", True)
         if isinstance(en, bool):
             return en
 
-        now = datetime.today().date()
-        fr = en.get("from", now)
-        to = en.get("to", now)
-        assert isinstance(fr, date)
-        assert isinstance(to, date)
+        now = datetime.today()
+        frd = en.get("from", now)
+        tod = en.get("to", now)
+        assert isinstance(frd, date)
+        assert isinstance(tod, date)
+        fr = datetime.combine(frd, time())
+        to = datetime.combine(tod, time()) + timedelta(hours=24,
+                                                       seconds=interval)
         return bool(fr <= now <= to)
 
     def _str(self, extra: Optional[str]) -> str:
@@ -360,18 +363,18 @@ def poller(args: argparse.Namespace, Config: Type[τ_config],
         config = get_config(args, Config)
         config.logger.info("starting poll")
         interval = config.interval()
-        start = time.perf_counter()
+        start = perf_counter()
         poll(args, config, db)
         # kill any uncommited state, avoid leaving open transactions between
         # polls
         db.rollback()
-        poll_time = (time.perf_counter() - start)
+        poll_time = (perf_counter() - start)
         config.logger.info(f"poll ended in {poll_time} seconds")
         sleep_for = int((max(0, interval - poll_time)))
         for _ in range(sleep_for):
             if stop_signal or args.oneshot:
                 return
-            time.sleep(1)
+            sleep(1)
         if stop_signal or args.oneshot:
             return
 
